@@ -59,7 +59,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if any(word in user_message.send_message() for word in keywords):
         if OWNER_CHAT_ID:
             await context.bot.send_message(
-                chat_id=OWNER_CHAT_ID,
+                chat_id=int (OWNER_CHAT_ID),
                 text=f"🔥 Горячий лид!\n👤 Имя: {user_name}\n🆔 ID: {user_id}\n💬 Сообщение: {user_message}"
             )
 
