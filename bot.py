@@ -1,12 +1,11 @@
 import os
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
-
 from openai import OpenAI
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-OWNER_CHAT_ID = os.environ.get("7567850330")
+OWNER_CHAT_ID = 7567850330
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
@@ -17,32 +16,26 @@ SYSTEM_PROMPT = """Ты менеджер маркетингового агент
 1. AI-АВАТАР ДЛЯ БЛОГА
 — Мы создаём цифрового аватара человека на основе его внешности и голоса
 — Аватар ведёт блог от лица клиента без его участия
-— Клиент получает активный блог не тратя своё время
-— Подходит для: блогеров, экспертов, предпринимателей
+— Подходит для блогеров, экспертов, предпринимателей
 
 2. ВЕДЕНИЕ АККАУНТОВ (КЛИПИНГ)
-— Мы берём контент клиента и распространяем его на 10-20 аккаунтах одновременно
-— Это даёт огромный охват аудитории
+— Берём контент клиента и распространяем на 10-20 аккаунтах одновременно
 — Клиент растёт в 10-20 раз быстрее
-— Работаем с: Instagram, TikTok, YouTube Shorts, Telegram
+— Работаем с Instagram, TikTok, YouTube Shorts, Telegram
 
 3. КОМПЛЕКСНОЕ ПРОДВИЖЕНИЕ
 — AI-аватар + клипинг на множестве аккаунтов
 — Полное ведение без участия клиента
-— Максимальный результат
 
-КАК ОБЩАТЬСЯ:
-— Будь дружелюбным и профессиональным
-— Объясняй преимущества простым языком
-— Если клиент заинтересован — спроси его имя, номер телефона и удобное время для звонка
-— Если спрашивают цену — скажи что цена индивидуальная и предложи бесплатную консультацию
-— Отвечай на узбекском, русском или английском в зависимости от языка клиента"""
+Если клиент заинтересован — спроси его имя и номер телефона.
+Если спрашивают цену — скажи что цена индивидуальная и предложи бесплатную консультацию.
+Отвечай на узбекском, русском или английском в зависимости от языка клиента."""
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_message = update.message.text
     user_name = update.message.from_user.first_name
     user_id = update.message.from_user.id
-    
+
     response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
@@ -50,18 +43,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             {"role": "user", "content": user_message}
         ]
     )
-    
+
     reply = response.choices[0].message.content
     await update.message.reply_text(reply)
-    
-    # Уведомление владельцу если клиент оставил контакты
-    keywords = ["телефон", "номер", "позвоните", "запишите", "хочу", "интересует", "консультация"]
-    if any(word in user_message.send_message() for word in keywords):
-        if OWNER_CHAT_ID:
-            await context.bot.send_message(
-                chat_id=int (OWNER_CHAT_ID),
-                text=f"🔥 Горячий лид!\n👤 Имя: {user_name}\n🆔 ID: {user_id}\n💬 Сообщение: {user_message}"
-            )
+
+    await context.bot.send_message(
+        chat_id=OWNER_CHAT_ID,
+        text=f"🔥 Новое сообщение!\n👤 Имя: {user_name}\n🆔 ID: {user_id}\n💬 Сообщение: {user_message}"
+    )
 
 app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
