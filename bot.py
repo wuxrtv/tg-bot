@@ -6,7 +6,7 @@ from openai import OpenAI
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-OWNER_CHAT_ID = os.environ.get("OWNER_CHAT_ID")
+OWNER_CHAT_ID = os.environ.get("7567850330")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
