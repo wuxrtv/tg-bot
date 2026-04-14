@@ -94,8 +94,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat_id=OWNER_CHAT_ID,
                 text=f"🔥 НОВЫЙ ЛИД!\n\n👤 Имя: {name}\n📞 Телефон: {phone}\n💡 Интересы: {interests}\n🕐 Время: {time}\n\n🆔 Telegram ID: {user_id}\n👤 Telegram имя: {user_name}"
             )
-    else:
-        await update.message.reply_text(reply)
+             else:
+await update.message.reply_text(reply)
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_name = update.message.from_user.first_name
@@ -108,8 +108,8 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         file_path = temp_audio_file.name
         
     try:
-        file = await context.bot.
-afzal: get_file(voice.file_id)
+        file = await
+         context.bot.afzal: get_file(voice.file_id)
         await file.download_to_drive(file_path)
         
         with open(file_path, "rb") as audio:
