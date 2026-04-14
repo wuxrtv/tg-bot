@@ -109,7 +109,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     try:
         file = await context.bot.
-[4/14/2026 5:45 AM] afzal: get_file(voice.file_id)
+afzal: get_file(voice.file_id)
         await file.download_to_drive(file_path)
         
         with open(file_path, "rb") as audio:
