@@ -50,8 +50,8 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_message(update, context)
     finally:
         if os.path.exists(file_path): os.remove(file_path)
-
-if name == '__main__':
+  
+     if name == "__main__":
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
