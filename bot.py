@@ -1,4 +1,4 @@
-[4/14/2026 5:45 AM] afzal: import os
+ import os
 import tempfile
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
