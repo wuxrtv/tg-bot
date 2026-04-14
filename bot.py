@@ -96,7 +96,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(reply)
 
+async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_name = update.message.from_user.first_name
+    user_id = update.message.from_user.id
+    
+    voice = update.message.voice
+    file = await context.bot.get_file(voice.file_id)
+    file_path = f"voice_{user_id}.ogg"
+    await file.download_to_drive(file_path)
+    
+    with open(file_path, "rb") as audio:
+        transcript = client.audio.transcriptions.create(
+            model="whisper-1",
+            file=audio
+        )
+    
+    user_message = transcript.text  
+    update.message.text = user_message
+    await update.message.reply_text(f"🎤 Вы сказали: {user_message}")
+    await handle_message(update, context)
+
 app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-print("Бот запущен!")
+app.add_handler(MessageHandler(filters.VOICE, handle_voice))
 app.run_polling()
