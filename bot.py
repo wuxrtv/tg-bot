@@ -1,11 +1,12 @@
-import os
+[4/14/2026 5:45 AM] afzal: import os
+import tempfile
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
 from openai import OpenAI
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-OWNER_CHAT_ID = 7567850330
+OWNER_CHAT_ID = int(os.environ.get("OWNER_CHAT_ID", 7567850330)) # Make sure OWNER_CHAT_ID is an integer
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
@@ -101,20 +102,36 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     
     voice = update.message.voice
-    file = await context.bot.get_file(voice.file_id)
-    file_path = f"voice_{user_id}.ogg"
-    await file.download_to_drive(file_path)
     
-    with open(file_path, "rb") as audio:
-        transcript = client.audio.transcriptions.create(
-            model="whisper-1",
-            file=audio
-        )
-    
-    user_message = transcript.text  
-    update.message.text = user_message
-    await update.message.reply_text(f"🎤 Вы сказали: {user_message}")
-    await handle_message(update, context)
+    # Создаем временный файл для сохранения голосового сообщения
+    with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as temp_audio_file:
+        file_path = temp_audio_file.name
+        
+    try:
+        file = await context.bot.
+[4/14/2026 5:45 AM] afzal: get_file(voice.file_id)
+        await file.download_to_drive(file_path)
+        
+        with open(file_path, "rb") as audio:
+            transcript = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio
+            )
+        
+        user_message = transcript.text  
+        
+        # Отправляем транскрибированный текст пользователю для подтверждения
+        await update.message.reply_text(f"🎤 Вы сказали: {user_message}")
+        
+        # Передаем транскрибированный текст в handle_message для дальнейшей обработки
+        # Создаем фиктивное сообщение, чтобы handle_message мог его обработать
+        update.message.text = user_message
+        await handle_message(update, context)
+        
+    finally:
+        # Удаляем временный файл после использования
+        if os.path.exists(file_path):
+            os.remove(file_path)
 
 app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
