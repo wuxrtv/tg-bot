@@ -32,71 +32,83 @@ SYSTEM_PROMPT = """Ты топовый менеджер по продажам м
 
 ПРАВИЛА ПРОДАЖ:
 — Всегда подчёркивай выгоду для клиента
-— Создавай срочность — говори что места ограничены
+— Создавай срочность
 — Если клиент сомневается — предложи БЕСПЛАТНУЮ консультацию
 — Если спрашивают цену — скажи от $200 но сначала нужна консультация
-— Всегда заканчивай вопросом чтобы продолжить диалог
-— Никогда не сдавайся — если клиент говорит нет найди другой аргумент
+— Всегда заканчивай вопросом
+— Никогда не сдавайся
 
-СБОР ДАННЫХ — делай по порядку:
-1. Сначала спроси ИМЯ
-2. Потом спроси НОМЕР ТЕЛЕФОНА
-3. Потом спроси что именно интересует
-4. Потом спроси УДОБНОЕ ВРЕМЯ для консультации
-5. Когда получишь все четыре данных напиши в конце: ДАННЫЕ_КЛИЕНТА: [имя] | [телефон] | [интересы] | [время]
-6. После этого продолжай разговор — поблагодари и скажи что менеджер свяжется в указанное время
+СБОР ДАННЫХ:
+1. Имя
+2. Телефон
+3. Интересы
+4. Время консультации
 
-Отвечай на узбекском русском или английском в зависимости от языка клиента."""
+После всех данных добавь:
+ДАННЫЕ_КЛИЕНТА: имя | телефон | интересы | время
+"""
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_message = update.message.text
     user_name = update.message.from_user.first_name
     user_id = update.message.from_user.id
-    
-if user_id not in user_histories:
-user_histories[user_id] = []
 
-user_histories[user_id].append({
-"role": "user",
-"content": user_message
-})
+    if user_id not in user_histories:
+        user_histories[user_id] = []
 
-messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-messages += user_histories[user_id]
+    user_histories[user_id].append({
+        "role": "user",
+        "content": user_message
+    })
 
-response = client.chat.completions.create(
-model="gpt-4o-mini",
-messages=messages
-)
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages += user_histories[user_id]
 
-reply = response.choices[0].message.content
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=messages
+    )
 
-user_histories[user_id].append({
-"role": "assistant",
-"content": reply
-})
+    reply = response.choices[0].message.content
 
-if "ДАННЫЕ_КЛИЕНТА:" in reply:
-clean_reply = reply.split("ДАННЫЕ_КЛИЕНТА:")[0].strip()
-await update.message.reply_text(clean_reply)
+    user_histories[user_id].append({
+        "role": "assistant",
+        "content": reply
+    })
 
-if user_id not in sent_leads:
-sent_leads.add(user_id)
-data = reply.split("ДАННЫЕ_КЛИЕНТА:")[1].strip()
-parts = data.split("|")
-name = parts[0].strip() if len(parts) > 0 else "—"
-phone = parts[1].strip() if len(parts) > 1 else "—"
-interests = parts[2].strip() if len(parts) > 2 else "—"
-time = parts[3].strip() if len(parts) > 3 else "—"
+    if "ДАННЫЕ_КЛИЕНТА:" in reply:
+        clean_reply = reply.split("ДАННЫЕ_КЛИЕНТА:")[0].strip()
+        await update.message.reply_text(clean_reply)
 
-await context.bot.send_message(
-chat_id=OWNER_CHAT_ID,
-text=f"🔥 НОВЫЙ ЛИД!\n\n👤 Имя: {name}\n📞 Телефон: {phone}\n💡 Интересы: {interests}\n🕐 Время: {time}\n\n🆔 Telegram ID: {user_id}\n👤 Telegram имя: {user_name}"
-)
-else:
-await update.message.reply_text(reply)
+        if user_id not in sent_leads:
+            sent_leads.add(user_id)
+
+            data = reply.split("ДАННЫЕ_КЛИЕНТА:")[1].strip()
+            parts = data.split("|")
+
+            name = parts[0].strip() if len(parts) > 0 else "—"
+            phone = parts[1].strip() if len(parts) > 1 else "—"
+            interests = parts[2].strip() if len(parts) > 2 else "—"
+            time = parts[3].strip() if len(parts) > 3 else "—"
+
+            await context.bot.send_message(
+                chat_id=OWNER_CHAT_ID,
+                text=f"""🔥 НОВЫЙ ЛИД!
+
+👤 Имя: {name}
+📞 Телефон: {phone}
+💡 Интересы: {interests}
+🕐 Время: {time}
+
+🆔 Telegram ID: {user_id}
+👤 Telegram имя: {user_name}"""
+            )
+    else:
+        await update.message.reply_text(reply)
+
 
 app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
 print("Бот запущен!")
 app.run_polling()
