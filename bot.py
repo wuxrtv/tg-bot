@@ -7,75 +7,88 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 OWNER_CHAT_ID = 7567850330
 
+# 🔥 Проверка ключей
+if not TELEGRAM_TOKEN:
+    raise ValueError("Нет TELEGRAM_TOKEN")
+
+if not OPENAI_API_KEY:
+    raise ValueError("Нет OPENAI_API_KEY")
+
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 user_histories = {}
 sent_leads = set()
 
-SYSTEM_PROMPT = """Ты топовый менеджер по продажам маркетингового агентства Virus Media. Твоя главная цель — ПРОДАТЬ услуги и записать клиента на консультацию.
-
-НАШИ УСЛУГИ:
-
-1. AI-АВАТАР ДЛЯ БЛОГА
-— Создаём цифрового аватара человека на основе его внешности и голоса
-— Аватар ведёт блог от лица клиента без его участия
-— Клиент зарабатывает и растёт в соцсетях пока спит!
-
-2. ВЕДЕНИЕ АККАУНТОВ (КЛИПИНГ)
-— Берём контент клиента и распространяем на 10-20 аккаунтах одновременно
-— Клиент растёт в 10-20 раз быстрее конкурентов
-— Работаем с Instagram, TikTok, YouTube Shorts, Telegram
-
-3. КОМПЛЕКСНОЕ ПРОДВИЖЕНИЕ
-— AI-аватар + клипинг на множестве аккаунтов
-— Полное ведение без участия клиента
-
-ПРАВИЛА ПРОДАЖ:
-— Всегда подчёркивай выгоду для клиента
-— Создавай срочность
-— Если клиент сомневается — предложи БЕСПЛАТНУЮ консультацию
-— Если спрашивают цену — скажи от $200 но сначала нужна консультация
-— Всегда заканчивай вопросом
-— Никогда не сдавайся
-
-СБОР ДАННЫХ:
-1. Имя
-2. Телефон
-3. Интересы
-4. Время консультации
-
-После всех данных добавь:
-ДАННЫЕ_КЛИЕНТА: имя | телефон | интересы | время
+SYSTEM_PROMPT = """Ты топовый менеджер по продажам маркетингового агентства Virus Media...
+(оставь свой текст без изменений)
 """
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_message = update.message.text
-    user_name = update.message.from_user.first_name
-    user_id = update.message.from_user.id
-
+# 🔥 Функция общения с GPT
+async def ask_gpt(user_id, text):
     if user_id not in user_histories:
         user_histories[user_id] = []
 
-    user_histories[user_id].append({
-        "role": "user",
-        "content": user_message
-    })
+    user_histories[user_id].append({"role": "user", "content": text})
 
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    messages += user_histories[user_id]
+    # ограничение памяти
+    user_histories[user_id] = user_histories[user_id][-10:]
 
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=messages
-    )
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + user_histories[user_id]
 
-    reply = response.choices[0].message.content
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages
+        )
+        reply = response.choices[0].message.content
+    except Exception as e:
+        print("Ошибка OpenAI:", e)
+        return "⚠️ Временно ошибка сервера, попробуй позже"
 
-    user_histories[user_id].append({
-        "role": "assistant",
-        "content": reply
-    })
+    user_histories[user_id].append({"role": "assistant", "content": reply})
+    return reply
 
+
+# 🔥 ОБРАБОТКА ТЕКСТА
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    user_name = update.message.from_user.first_name
+    text = update.message.text
+
+    reply = await ask_gpt(user_id, text)
+
+    await process_reply(update, context, reply, user_id, user_name)
+
+
+# 🔥 ОБРАБОТКА ГОЛОСА
+async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    user_name = update.message.from_user.first_name
+
+    voice = await update.message.voice.get_file()
+    file_path = f"voice_{user_id}.ogg"
+    await voice.download_to_drive(file_path)
+
+    try:
+        with open(file_path, "rb") as audio:
+            transcript = client.audio.transcriptions.create(
+                model="gpt-4o-mini-transcribe",
+                file=audio
+            )
+
+        text = transcript.text
+    except Exception as e:
+        print("Ошибка распознавания:", e)
+        await update.message.reply_text("Не смог распознать голос 😢")
+        return
+
+    reply = await ask_gpt(user_id, text)
+
+    await process_reply(update, context, reply, user_id, user_name)
+
+
+# 🔥 ОБЩАЯ ЛОГИКА
+async def process_reply(update, context, reply, user_id, user_name):
     if "ДАННЫЕ_КЛИЕНТА:" in reply:
         clean_reply = reply.split("ДАННЫЕ_КЛИЕНТА:")[0].strip()
         await update.message.reply_text(clean_reply)
@@ -83,17 +96,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user_id not in sent_leads:
             sent_leads.add(user_id)
 
-            data = reply.split("ДАННЫЕ_КЛИЕНТА:")[1].strip()
-            parts = data.split("|")
+            try:
+                data = reply.split("ДАННЫЕ_КЛИЕНТА:")[1].strip()
+                parts = data.split("|")
 
-            name = parts[0].strip() if len(parts) > 0 else "—"
-            phone = parts[1].strip() if len(parts) > 1 else "—"
-            interests = parts[2].strip() if len(parts) > 2 else "—"
-            time = parts[3].strip() if len(parts) > 3 else "—"
+                name = parts[0].strip() if len(parts) > 0 else "—"
+                phone = parts[1].strip() if len(parts) > 1 else "—"
+                interests = parts[2].strip() if len(parts) > 2 else "—"
+                time = parts[3].strip() if len(parts) > 3 else "—"
 
-            await context.bot.send_message(
-                chat_id=OWNER_CHAT_ID,
-                text=f"""🔥 НОВЫЙ ЛИД!
+                await context.bot.send_message(
+                    chat_id=OWNER_CHAT_ID,
+                    text=f"""🔥 НОВЫЙ ЛИД!
 
 👤 Имя: {name}
 📞 Телефон: {phone}
@@ -102,13 +116,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 🆔 Telegram ID: {user_id}
 👤 Telegram имя: {user_name}"""
-            )
+                )
+            except Exception as e:
+                print("Ошибка обработки лида:", e)
     else:
         await update.message.reply_text(reply)
 
 
+# 🚀 ЗАПУСК
 app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-print("Бот запущен!")
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+app.add_handler(MessageHandler(filters.VOICE, handle_voice))
+
+print("Бот запущен 🚀")
 app.run_polling()
