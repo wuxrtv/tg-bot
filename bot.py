@@ -49,10 +49,10 @@ SYSTEM_PROMPT = """Ты топовый менеджер по продажам м
 Отвечай на узбекском русском или английском в зависимости от языка клиента."""
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-user_message = update.message.text
-user_name = update.message.from_user.first_name
-user_id = update.message.from_user.id
-
+    user_message = update.message.text
+    user_name = update.message.from_user.first_name
+    user_id = update.message.from_user.id
+    
 if user_id not in user_histories:
 user_histories[user_id] = []
 
