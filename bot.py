@@ -137,7 +137,19 @@ UPSELL — ПЛАВНО:
 #  ПАМЯТЬ
 # ──────────────────────────────────────────────
 user_histories: dict[int, list] = {}
-sent_leads: set[int] = set()
+LEADS_FILE = "sent_leads.txt"
+
+def load_sent_leads() -> set:
+    if os.path.exists(LEADS_FILE):
+        with open(LEADS_FILE, "r") as f:
+            return set(int(line.strip()) for line in f if line.strip())
+    return set()
+
+def save_lead(user_id: int):
+    with open(LEADS_FILE, "a") as f:
+        f.write(f"{user_id}\n")
+
+sent_leads: set[int] = load_sent_leads()
 user_locks: dict[int, asyncio.Lock] = {}  # 🔒 защита от дублей
 
 
@@ -178,6 +190,12 @@ async def send_lead_to_owner(
     tg_username: str,
     raw_data: str,
 ):
+    if user_id in sent_leads:
+        logger.info(f"Лид {user_id} уже был отправлен ранее, пропускаем.")
+        sent_leads.add(user_id)
+        save_lead(user_id)
+        return
+    try:
     # Разрешаем повторную отправку если данные обновились (убрали блок sent_leads)
     try:
         parts    = [p.strip() for p in raw_data.split("|")]
