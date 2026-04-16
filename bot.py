@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 OWNER_CHAT_ID_ENV = os.environ.get("OWNER_CHAT_ID")
-DEFAULT_OWNER_CHAT_ID = 7567850330  # ← твой chat_id
+DEFAULT_OWNER_CHAT_ID = 7567850330
 
 if not TELEGRAM_TOKEN:
     raise ValueError("TELEGRAM_TOKEN не найден.")
@@ -76,16 +76,16 @@ SYSTEM_PROMPT = """
 НАШИ УСЛУГИ (подавай по одной, постепенно):
 ━━━━━━━━━━━━━━━━━━
 
-1️⃣ ЛИЧНЫЙ БРЕНД И СОЦСЕТИ
+1 ЛИЧНЫЙ БРЕНД И СОЦСЕТИ
 Строим личный бренд в Instagram, YouTube, TikTok.
-Результат: аудитория доверяет → заявки приходят сами, без холодных звонков.
+Результат: аудитория доверяет, заявки приходят сами, без холодных звонков.
 
-2️⃣ ИИ-АГЕНТЫ И ИИ-АВАТАР
+2 ИИ-АГЕНТЫ И ИИ-АВАТАР
 ИИ-агенты автоматизируют продажи и поддержку 24/7.
 Цифровой аватар снимается в видео и создаёт контент вместо владельца.
 Результат: бизнес работает и масштабируется пока вы занимаетесь другим.
 
-3️⃣ КОПИРАЙТИНГ И МАССОВЫЕ АККАУНТЫ
+3 КОПИРАЙТИНГ И МАССОВЫЕ АККАУНТЫ
 Продающие тексты, сценарии, посты.
 Ведём сотни и тысячи аккаунтов через ИИ — каждый отвечает, вовлекает, продаёт.
 Результат: огромный охват на автопилоте.
@@ -106,51 +106,51 @@ UPSELL — ПЛАВНО:
 Когда клиент назвал формат и время — скажи:
 "Отлично, [время] записал. Уточню у руководства и напишу вам подтверждение."
 
-Затем В САМОМ КОНЦЕ своего сообщения добавь (клиент это НЕ увидит):
+Затем В САМОМ КОНЦЕ своего сообщения добавь строго на новой строке (клиент НЕ увидит):
 СОГЛАСОВАНИЕ_ВРЕМЕНИ: ИМЯ | ВРЕМЯ | ФОРМАТ
 
 ━━━━━━━━━━━━━━━━━━
-СБОР ЛИДА — ОЧЕНЬ ВАЖНО:
+СБОР ЛИДА:
 ━━━━━━━━━━━━━━━━━━
 По ходу диалога собирай: имя, контакт (телефон или Telegram), интерес, формат встречи, время.
 
-Как только собраны ВСЕ 5 пунктов — В САМОМ КОНЦЕ своего сообщения добавь (клиент это НЕ увидит):
+Как только собраны ВСЕ 5 пунктов — В САМОМ КОНЦЕ своего сообщения добавь строго на новой строке (клиент НЕ увидит):
 ДАННЫЕ_КЛИЕНТА: ИМЯ | КОНТАКТ | ИНТЕРЕС | ФОРМАТ | ВРЕМЯ
 
 Пример:
 ДАННЫЕ_КЛИЕНТА: Алишер | +998901234567 | Личный бренд | Zoom | Вторник 10:00
 
-ВАЖНО: эта строка должна быть на отдельной строке в самом конце. Никакого текста после неё.
+ВАЖНО: после этой строки — никакого текста.
 
 ━━━━━━━━━━━━━━━━━━
 СТИЛЬ:
 ━━━━━━━━━━━━━━━━━━
-• Максимум 3–4 предложения за раз.
+• Максимум 3-4 предложения за раз.
 • Один вопрос в конце сообщения.
-• Эмодзи — 1–2 максимум.
+• Эмодзи — 1-2 максимум.
 • Без фраз: "конечно!", "разумеется!", "я рад помочь!", "отличный вопрос!".
 • Бесплатных советов не давай — цель встреча, не консультация.
 • Если клиент грубит — остаёшься спокойным и профессиональным.
 """
 
 # ──────────────────────────────────────────────
-#  ПАМЯТЬ
+#  ПАМЯТЬ НА ДИСКЕ
 # ──────────────────────────────────────────────
-user_histories: dict[int, list] = {}
 LEADS_FILE = "sent_leads.txt"
 
 def load_sent_leads() -> set:
     if os.path.exists(LEADS_FILE):
         with open(LEADS_FILE, "r") as f:
-            return set(int(line.strip()) for line in f if line.strip())
+            return set(int(line.strip()) for line in f if line.strip().isdigit())
     return set()
 
-def save_lead(user_id: int):
+def save_lead_to_disk(user_id: int):
     with open(LEADS_FILE, "a") as f:
         f.write(f"{user_id}\n")
 
+user_histories: dict[int, list] = {}
 sent_leads: set[int] = load_sent_leads()
-user_locks: dict[int, asyncio.Lock] = {}  # 🔒 защита от дублей
+user_locks: dict[int, asyncio.Lock] = {}
 
 
 # ──────────────────────────────────────────────
@@ -182,7 +182,7 @@ async def ask_gpt(user_id: int, text: str) -> str:
 
 
 # ──────────────────────────────────────────────
-#  ОТПРАВКА ЛИДА — ИСПРАВЛЕННАЯ ВЕРСИЯ
+#  ОТПРАВКА ЛИДА
 # ──────────────────────────────────────────────
 async def send_lead_to_owner(
     context: ContextTypes.DEFAULT_TYPE,
@@ -191,12 +191,9 @@ async def send_lead_to_owner(
     raw_data: str,
 ):
     if user_id in sent_leads:
-        logger.info(f"Лид {user_id} уже был отправлен ранее, пропускаем.")
-        sent_leads.add(user_id)
-        save_lead(user_id)
+        logger.info(f"Лид {user_id} уже отправлен, пропускаем.")
         return
-    try:
-    # Разрешаем повторную отправку если данные обновились (убрали блок sent_leads)
+
     try:
         parts    = [p.strip() for p in raw_data.split("|")]
         name     = parts[0] if len(parts) > 0 else "—"
@@ -210,24 +207,27 @@ async def send_lead_to_owner(
         await context.bot.send_message(
             chat_id=OWNER_CHAT_ID,
             text=(
-                f"🔥 НОВЫЙ ЛИД — Virus Media\n\n"
-                f"👤 Имя: {name}\n"
-                f"📞 Контакт: {contact}\n"
-                f"💡 Интерес: {interest}\n"
-                f"📅 Формат: {fmt}\n"
-                f"🕐 Время: {time}\n\n"
-                f"─────────────────\n"
-                f"🆔 Telegram ID: {user_id}\n"
-                f"👤 Username: @{tg_username}"
+                f"НОВЫЙ ЛИД — Virus Media\n\n"
+                f"Имя: {name}\n"
+                f"Контакт: {contact}\n"
+                f"Интерес: {interest}\n"
+                f"Формат: {fmt}\n"
+                f"Время: {time}\n\n"
+                f"Telegram ID: {user_id}\n"
+                f"Username: @{tg_username}"
             ),
         )
-        logger.info(f"✅ Лид отправлен успешно: {name}")
+
+        sent_leads.add(user_id)
+        save_lead_to_disk(user_id)
+        logger.info(f"Лид сохранён: {name}")
+
     except Exception as e:
-        logger.error(f"❌ Ошибка отправки лида: {e}")
+        logger.error(f"Ошибка отправки лида: {e}")
 
 
 # ──────────────────────────────────────────────
-#  ЗАПРОС НА СОГЛАСОВАНИЕ ВРЕМЕНИ
+#  СОГЛАСОВАНИЕ ВРЕМЕНИ
 # ──────────────────────────────────────────────
 async def send_time_request(
     context: ContextTypes.DEFAULT_TYPE,
@@ -244,19 +244,17 @@ async def send_time_request(
         await context.bot.send_message(
             chat_id=OWNER_CHAT_ID,
             text=(
-                f"📅 ЗАПРОС НА ВСТРЕЧУ\n\n"
-                f"👤 Клиент: {name}\n"
-                f"🕐 Желаемое время: {time}\n"
-                f"📍 Формат: {fmt}\n\n"
-                f"🆔 Telegram ID: {user_id}\n"
-                f"👤 Username: @{tg_username}\n\n"
-                f"✅ Подходит → подтвердите клиенту\n"
-                f"❌ Не подходит → предложите другое время"
+                f"ЗАПРОС НА ВСТРЕЧУ\n\n"
+                f"Клиент: {name}\n"
+                f"Время: {time}\n"
+                f"Формат: {fmt}\n\n"
+                f"Telegram ID: {user_id}\n"
+                f"Username: @{tg_username}"
             ),
         )
-        logger.info(f"📅 Запрос на встречу отправлен: {name} | {time} | {fmt}")
+        logger.info(f"Запрос на встречу: {name} | {time} | {fmt}")
     except Exception as e:
-        logger.error(f"❌ Ошибка отправки запроса на встречу: {e}")
+        logger.error(f"Ошибка отправки запроса на встречу: {e}")
 
 
 # ──────────────────────────────────────────────
@@ -270,9 +268,8 @@ async def process_reply(
     tg_username: str,
 ):
     clean = reply
-    logger.info(f"Полный ответ GPT: {repr(clean)}")
+    logger.info(f"Ответ GPT: {repr(clean)}")
 
-    # Извлекаем ДАННЫЕ_КЛИЕНТА
     if "ДАННЫЕ_КЛИЕНТА:" in clean:
         idx   = clean.index("ДАННЫЕ_КЛИЕНТА:")
         raw   = clean[idx + len("ДАННЫЕ_КЛИЕНТА:"):].split("\n")[0].strip()
@@ -280,7 +277,6 @@ async def process_reply(
         logger.info(f"Найден лид: {raw}")
         await send_lead_to_owner(context, user_id, tg_username, raw)
 
-    # Извлекаем СОГЛАСОВАНИЕ_ВРЕМЕНИ
     if "СОГЛАСОВАНИЕ_ВРЕМЕНИ:" in clean:
         idx   = clean.index("СОГЛАСОВАНИЕ_ВРЕМЕНИ:")
         raw   = clean[idx + len("СОГЛАСОВАНИЕ_ВРЕМЕНИ:"):].split("\n")[0].strip()
@@ -292,7 +288,7 @@ async def process_reply(
 
 
 # ──────────────────────────────────────────────
-#  ОБЩАЯ ФУНКЦИЯ ОБРАБОТКИ ВХОДЯЩЕГО ТЕКСТА
+#  ОБЩАЯ ОБРАБОТКА
 # ──────────────────────────────────────────────
 async def process_user_input(
     text: str,
@@ -302,13 +298,11 @@ async def process_user_input(
     user_id   = update.message.from_user.id
     user_name = update.message.from_user.username or update.message.from_user.first_name or "unknown"
 
-    # 🔒 Получаем или создаём лок для этого пользователя
     if user_id not in user_locks:
         user_locks[user_id] = asyncio.Lock()
 
-    # Если уже обрабатываем запрос от этого пользователя — пропускаем
     if user_locks[user_id].locked():
-        logger.warning(f"[{user_id}] Запрос уже обрабатывается, дубль пропущен.")
+        logger.warning(f"[{user_id}] уже обрабатывается, дубль пропущен.")
         return
 
     async with user_locks[user_id]:
@@ -324,13 +318,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_message = update.message.text
         if not user_message:
             return
-
         user_id   = update.message.from_user.id
         user_name = update.message.from_user.username or update.message.from_user.first_name or "unknown"
         logger.info(f"[TEXT] [{user_id}] @{user_name}: {user_message}")
-
         await process_user_input(user_message, update, context)
-
     except Exception as e:
         logger.error(f"handle_message error: {e}")
         await update.message.reply_text("Что-то пошло не так. Напишите ещё раз, пожалуйста.")
@@ -342,7 +333,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id   = update.message.from_user.id
     user_name = update.message.from_user.username or update.message.from_user.first_name or "unknown"
-
     try:
         voice_file = await update.message.voice.get_file()
         file_path  = f"/tmp/voice_{user_id}_{uuid.uuid4().hex}.ogg"
@@ -353,7 +343,6 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 model="whisper-1",
                 file=audio,
             )
-
         os.remove(file_path)
         text = transcript.text.strip()
 
@@ -376,7 +365,7 @@ def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
-    logger.info("✅ Роберт запущен и готов к работе...")
+    logger.info("Роберт запущен и готов к работе...")
     app.run_polling()
 
 
