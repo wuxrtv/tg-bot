@@ -1,6 +1,7 @@
 import os
 import logging
 import uuid
+import asyncio
 
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
@@ -21,7 +22,7 @@ logger = logging.getLogger(__name__)
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 OWNER_CHAT_ID_ENV = os.environ.get("OWNER_CHAT_ID")
-DEFAULT_OWNER_CHAT_ID = 7567850330
+DEFAULT_OWNER_CHAT_ID = 7567850330  # ← твой chat_id
 
 if not TELEGRAM_TOKEN:
     raise ValueError("TELEGRAM_TOKEN не найден.")
@@ -44,16 +45,13 @@ SYSTEM_PROMPT = """
 Никогда не говори что ты бот или ИИ. Ты — Роберт, живой сотрудник.
 
 ━━━━━━━━━━━━━━━━━━
-ЯЗЫК — ГЛАВНОЕ ПРАВИЛО:
+ЯЗЫК:
 ━━━━━━━━━━━━━━━━━━
 • Определи язык по ПЕРВОМУ сообщению клиента.
-• Если клиент написал на РУССКОМ — отвечай на русском и спроси:
-  "Продолжим на русском языке?"
-• Если клиент написал на УЗБЕКСКОМ — отвечай на узбекском и спроси:
-  "O'zbek tilida davom etamizmi?"
-• Если клиент написал на ЛЮБОМ ДРУГОМ языке (английский, китайский, турецкий и т.д.) —
-  отвечай на русском и спроси: "Продолжим на русском или предпочитаете узбекский?"
-• После подтверждения языка — общайся ТОЛЬКО на нём до конца диалога.
+• Клиент написал на РУССКОМ → отвечай на русском, спроси: "Продолжим на русском языке?"
+• Клиент написал на УЗБЕКСКОМ → отвечай на узбекском, спроси: "O'zbek tilida davom etamizmi?"
+• Клиент написал на ЛЮБОМ ДРУГОМ языке → отвечай на русском, спроси: "Продолжим на русском или предпочитаете узбекский?"
+• После подтверждения — общайся ТОЛЬКО на выбранном языке до конца.
 • НИКОГДА не пиши одно сообщение сразу на двух языках.
 
 ━━━━━━━━━━━━━━━━━━
@@ -61,21 +59,18 @@ SYSTEM_PROMPT = """
 ━━━━━━━━━━━━━━━━━━
 
 ШАГ 1 — ПЕРВОЕ СООБЩЕНИЕ:
-Определи язык → поздоровайся → представься как Роберт → спроси подтверждение языка.
-Пример (клиент написал на русском):
-"Привет! Меня зовут Роберт 👋 Продолжим на русском языке?"
+Поздоровайся, представься как Роберт, спроси подтверждение языка.
+Пример: "Привет! Меня зовут Роберт 👋 Продолжим на русском языке?"
 
 ШАГ 2 — ПОСЛЕ ПОДТВЕРЖДЕНИЯ ЯЗЫКА:
-Спроси имя. Коротко и тепло.
-Пример: "Отлично! Как вас зовут?"
+Спроси имя коротко: "Отлично! Как вас зовут?"
 
 ШАГ 3 — ПОСЛЕ ИМЕНИ:
-Поздоровайся по имени. Задай ОДИН вопрос — узнай чем занимается человек или что его интересует.
-Не перечисляй услуги. Просто слушай.
+Поздоровайся по имени. Спроси чем занимается человек или что его интересует. Не перечисляй услуги.
 
 ШАГ 4 — ВЫЯВЛЕНИЕ ПОТРЕБНОСТИ:
-Задай уточняющий вопрос чтобы понять главную боль или цель клиента.
-Только потом предложи ОДНУ подходящую услугу — коротко, 2–3 предложения.
+Задай уточняющий вопрос чтобы понять боль клиента.
+Потом предложи ОДНУ подходящую услугу — коротко, 2–3 предложения. Жди реакции.
 
 ━━━━━━━━━━━━━━━━━━
 НАШИ УСЛУГИ (подавай по одной, постепенно):
@@ -88,7 +83,7 @@ SYSTEM_PROMPT = """
 2️⃣ ИИ-АГЕНТЫ И ИИ-АВАТАР
 ИИ-агенты автоматизируют продажи и поддержку 24/7.
 Цифровой аватар снимается в видео и создаёт контент вместо владельца.
-Результат: бизнес работает пока вы занимаетесь другим.
+Результат: бизнес работает и масштабируется пока вы занимаетесь другим.
 
 3️⃣ КОПИРАЙТИНГ И МАССОВЫЕ АККАУНТЫ
 Продающие тексты, сценарии, посты.
@@ -98,34 +93,39 @@ SYSTEM_PROMPT = """
 ━━━━━━━━━━━━━━━━━━
 UPSELL — ПЛАВНО:
 ━━━━━━━━━━━━━━━━━━
-После того как человек заинтересовался одной услугой — мягко упомяни смежную через пользу:
+После интереса к одной услуге — мягко предложи смежную:
 "Кстати, раз для вас важен [результат] — есть ещё одно направление которое хорошо это усиливает. Интересно?"
-Жди ответа. Не перечисляй всё сразу.
+Жди ответа. Не вали всё сразу.
 
 ━━━━━━━━━━━━━━━━━━
 ВСТРЕЧА:
 ━━━━━━━━━━━━━━━━━━
-Когда человек достаточно заинтересован — предложи встречу:
-"Давайте созвонимся, расскажу подробнее и посмотрим что подойдёт именно вам.
-Вам удобнее живая встреча или Zoom?"
+Когда клиент заинтересован — предложи встречу:
+"Давайте созвонимся, расскажу подробнее и посмотрим что подойдёт именно вам. Вам удобнее живая встреча или Zoom?"
 
-Когда человек назвал формат и время — скажи:
+Когда клиент назвал формат и время — скажи:
 "Отлично, [время] записал. Уточню у руководства и напишу вам подтверждение."
 
-Затем добавь в конец сообщения (НЕВИДИМО для клиента):
+Затем В САМОМ КОНЦЕ своего сообщения добавь (клиент это НЕ увидит):
 СОГЛАСОВАНИЕ_ВРЕМЕНИ: ИМЯ | ВРЕМЯ | ФОРМАТ
 
 ━━━━━━━━━━━━━━━━━━
-СБОР ДАННЫХ ЛИДА:
+СБОР ЛИДА — ОЧЕНЬ ВАЖНО:
 ━━━━━━━━━━━━━━━━━━
-Когда собраны все 5 пунктов (имя, контакт, интерес, формат, время) —
-добавь в конец сообщения (НЕВИДИМО для клиента):
+По ходу диалога собирай: имя, контакт (телефон или Telegram), интерес, формат встречи, время.
+
+Как только собраны ВСЕ 5 пунктов — В САМОМ КОНЦЕ своего сообщения добавь (клиент это НЕ увидит):
 ДАННЫЕ_КЛИЕНТА: ИМЯ | КОНТАКТ | ИНТЕРЕС | ФОРМАТ | ВРЕМЯ
+
+Пример:
+ДАННЫЕ_КЛИЕНТА: Алишер | +998901234567 | Личный бренд | Zoom | Вторник 10:00
+
+ВАЖНО: эта строка должна быть на отдельной строке в самом конце. Никакого текста после неё.
 
 ━━━━━━━━━━━━━━━━━━
 СТИЛЬ:
 ━━━━━━━━━━━━━━━━━━
-• Сообщения короткие — максимум 3–4 предложения.
+• Максимум 3–4 предложения за раз.
 • Один вопрос в конце сообщения.
 • Эмодзи — 1–2 максимум.
 • Без фраз: "конечно!", "разумеется!", "я рад помочь!", "отличный вопрос!".
@@ -138,7 +138,7 @@ UPSELL — ПЛАВНО:
 # ──────────────────────────────────────────────
 user_histories: dict[int, list] = {}
 sent_leads: set[int] = set()
-processed_messages: set[int] = set()   # защита от дублей по message_id
+user_locks: dict[int, asyncio.Lock] = {}  # 🔒 защита от дублей
 
 
 # ──────────────────────────────────────────────
@@ -170,7 +170,7 @@ async def ask_gpt(user_id: int, text: str) -> str:
 
 
 # ──────────────────────────────────────────────
-#  ОТПРАВКА ЛИДА
+#  ОТПРАВКА ЛИДА — ИСПРАВЛЕННАЯ ВЕРСИЯ
 # ──────────────────────────────────────────────
 async def send_lead_to_owner(
     context: ContextTypes.DEFAULT_TYPE,
@@ -178,10 +178,7 @@ async def send_lead_to_owner(
     tg_username: str,
     raw_data: str,
 ):
-    if user_id in sent_leads:
-        return
-    sent_leads.add(user_id)
-
+    # Разрешаем повторную отправку если данные обновились (убрали блок sent_leads)
     try:
         parts    = [p.strip() for p in raw_data.split("|")]
         name     = parts[0] if len(parts) > 0 else "—"
@@ -190,24 +187,25 @@ async def send_lead_to_owner(
         fmt      = parts[3] if len(parts) > 3 else "—"
         time     = parts[4] if len(parts) > 4 else "—"
 
+        logger.info(f"Отправляем лида: {name} | {contact} | {interest} | {fmt} | {time}")
+
         await context.bot.send_message(
             chat_id=OWNER_CHAT_ID,
             text=(
-                f"🔥 *НОВЫЙ ЛИД — Virus Media*\n\n"
+                f"🔥 НОВЫЙ ЛИД — Virus Media\n\n"
                 f"👤 Имя: {name}\n"
                 f"📞 Контакт: {contact}\n"
                 f"💡 Интерес: {interest}\n"
                 f"📅 Формат: {fmt}\n"
                 f"🕐 Время: {time}\n\n"
                 f"─────────────────\n"
-                f"🆔 Telegram ID: `{user_id}`\n"
+                f"🆔 Telegram ID: {user_id}\n"
                 f"👤 Username: @{tg_username}"
             ),
-            parse_mode="Markdown",
         )
-        logger.info(f"Лид: {name} | {contact} | {interest} | {fmt} | {time}")
+        logger.info(f"✅ Лид отправлен успешно: {name}")
     except Exception as e:
-        logger.error(f"Ошибка отправки лида: {e}")
+        logger.error(f"❌ Ошибка отправки лида: {e}")
 
 
 # ──────────────────────────────────────────────
@@ -228,20 +226,19 @@ async def send_time_request(
         await context.bot.send_message(
             chat_id=OWNER_CHAT_ID,
             text=(
-                f"📅 *ЗАПРОС НА ВСТРЕЧУ*\n\n"
+                f"📅 ЗАПРОС НА ВСТРЕЧУ\n\n"
                 f"👤 Клиент: {name}\n"
                 f"🕐 Желаемое время: {time}\n"
                 f"📍 Формат: {fmt}\n\n"
-                f"🆔 Telegram ID: `{user_id}`\n"
+                f"🆔 Telegram ID: {user_id}\n"
                 f"👤 Username: @{tg_username}\n\n"
                 f"✅ Подходит → подтвердите клиенту\n"
                 f"❌ Не подходит → предложите другое время"
             ),
-            parse_mode="Markdown",
         )
-        logger.info(f"Встреча: {name} | {time} | {fmt}")
+        logger.info(f"📅 Запрос на встречу отправлен: {name} | {time} | {fmt}")
     except Exception as e:
-        logger.error(f"Ошибка отправки запроса на встречу: {e}")
+        logger.error(f"❌ Ошибка отправки запроса на встречу: {e}")
 
 
 # ──────────────────────────────────────────────
@@ -255,13 +252,17 @@ async def process_reply(
     tg_username: str,
 ):
     clean = reply
+    logger.info(f"Полный ответ GPT: {repr(clean)}")
 
+    # Извлекаем ДАННЫЕ_КЛИЕНТА
     if "ДАННЫЕ_КЛИЕНТА:" in clean:
         idx   = clean.index("ДАННЫЕ_КЛИЕНТА:")
         raw   = clean[idx + len("ДАННЫЕ_КЛИЕНТА:"):].split("\n")[0].strip()
         clean = clean[:idx].strip()
+        logger.info(f"Найден лид: {raw}")
         await send_lead_to_owner(context, user_id, tg_username, raw)
 
+    # Извлекаем СОГЛАСОВАНИЕ_ВРЕМЕНИ
     if "СОГЛАСОВАНИЕ_ВРЕМЕНИ:" in clean:
         idx   = clean.index("СОГЛАСОВАНИЕ_ВРЕМЕНИ:")
         raw   = clean[idx + len("СОГЛАСОВАНИЕ_ВРЕМЕНИ:"):].split("\n")[0].strip()
@@ -273,33 +274,44 @@ async def process_reply(
 
 
 # ──────────────────────────────────────────────
+#  ОБЩАЯ ФУНКЦИЯ ОБРАБОТКИ ВХОДЯЩЕГО ТЕКСТА
+# ──────────────────────────────────────────────
+async def process_user_input(
+    text: str,
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    user_id   = update.message.from_user.id
+    user_name = update.message.from_user.username or update.message.from_user.first_name or "unknown"
+
+    # 🔒 Получаем или создаём лок для этого пользователя
+    if user_id not in user_locks:
+        user_locks[user_id] = asyncio.Lock()
+
+    # Если уже обрабатываем запрос от этого пользователя — пропускаем
+    if user_locks[user_id].locked():
+        logger.warning(f"[{user_id}] Запрос уже обрабатывается, дубль пропущен.")
+        return
+
+    async with user_locks[user_id]:
+        reply = await ask_gpt(user_id, text)
+        await process_reply(reply, update, context, user_id, user_name)
+
+
+# ──────────────────────────────────────────────
 #  ТЕКСТОВЫЕ СООБЩЕНИЯ
 # ──────────────────────────────────────────────
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        message_id = update.message.message_id
-
-        # ✅ Защита от дублей — пропускаем уже обработанные message_id
-        if message_id in processed_messages:
-            logger.warning(f"Дубль message_id={message_id}, пропускаем.")
-            return
-        processed_messages.add(message_id)
-
-        # Не даём сету расти бесконечно
-        if len(processed_messages) > 10000:
-            processed_messages.clear()
-
         user_message = update.message.text
-        user_name    = update.message.from_user.username or update.message.from_user.first_name or "unknown"
-        user_id      = update.message.from_user.id
-
         if not user_message:
             return
 
+        user_id   = update.message.from_user.id
+        user_name = update.message.from_user.username or update.message.from_user.first_name or "unknown"
         logger.info(f"[TEXT] [{user_id}] @{user_name}: {user_message}")
 
-        reply = await ask_gpt(user_id, user_message)
-        await process_reply(reply, update, context, user_id, user_name)
+        await process_user_input(user_message, update, context)
 
     except Exception as e:
         logger.error(f"handle_message error: {e}")
@@ -310,21 +322,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 #  ГОЛОСОВЫЕ СООБЩЕНИЯ
 # ──────────────────────────────────────────────
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id   = update.message.from_user.id
+    user_name = update.message.from_user.username or update.message.from_user.first_name or "unknown"
+
     try:
-        message_id = update.message.message_id
-
-        # ✅ Защита от дублей
-        if message_id in processed_messages:
-            logger.warning(f"Дубль voice message_id={message_id}, пропускаем.")
-            return
-        processed_messages.add(message_id)
-
-        if len(processed_messages) > 10000:
-            processed_messages.clear()
-
-        user_id   = update.message.from_user.id
-        user_name = update.message.from_user.username or update.message.from_user.first_name or "unknown"
-
         voice_file = await update.message.voice.get_file()
         file_path  = f"/tmp/voice_{user_id}_{uuid.uuid4().hex}.ogg"
         await voice_file.download_to_drive(file_path)
@@ -339,15 +340,11 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = transcript.text.strip()
 
         if not text:
-            await update.message.reply_text(
-                "Не смог разобрать голосовое — попробуйте написать текстом."
-            )
+            await update.message.reply_text("Не смог разобрать голосовое — попробуйте написать текстом.")
             return
 
         logger.info(f"[VOICE] [{user_id}] @{user_name}: {text}")
-
-        reply = await ask_gpt(user_id, text)
-        await process_reply(reply, update, context, user_id, user_name)
+        await process_user_input(text, update, context)
 
     except Exception as e:
         logger.error(f"handle_voice error: {e}")
