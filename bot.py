@@ -1,4 +1,6 @@
 import os
+import sys
+import subprocess
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
 from openai import OpenAI
@@ -7,29 +9,45 @@ import uuid
 
 # Configure logging
 logging.basicConfig(
-    format=\'%(asctime)s - %(name)s - %(levelname)s - %(message)s\',
+    format=\'%(asctime)s - %(name)s - %(levelname)s - %(message)s\
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
+# Function to install dependencies
+def install_dependencies():
+    required_packages = ["python-telegram-bot", "openai"]
+    for package in required_packages:
+        try:
+            __import__(package.replace("-", "_"))
+        except ImportError:
+            logger.info(f"Installing {package}...")
+            subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+            logger.info(f"{package} installed successfully.")
+
 # 🔑 TOKENS
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-OWNER_CHAT_ID = os.environ.get("OWNER_CHAT_ID") # Get from environment variable
+
+# Default OWNER_CHAT_ID if not set in environment variables
+DEFAULT_OWNER_CHAT_ID = 7567850330  # Your provided chat ID
+OWNER_CHAT_ID_ENV = os.environ.get("OWNER_CHAT_ID")
 
 if not TELEGRAM_TOKEN:
-    raise ValueError("TELEGRAM_TOKEN not found")
+    raise ValueError("TELEGRAM_TOKEN not found in environment variables.")
 
 if not OPENAI_API_KEY:
-    raise ValueError("OPENAI_API_KEY not found")
+    raise ValueError("OPENAI_API_KEY not found in environment variables.")
 
-if not OWNER_CHAT_ID:
-    raise ValueError("OWNER_CHAT_ID not found")
-
-try:
-    OWNER_CHAT_ID = int(OWNER_CHAT_ID)
-except ValueError:
-    raise ValueError("OWNER_CHAT_ID must be an integer")
+if OWNER_CHAT_ID_ENV:
+    try:
+        OWNER_CHAT_ID = int(OWNER_CHAT_ID_ENV)
+    except ValueError:
+        logger.warning(f"OWNER_CHAT_ID from environment is not an integer: {OWNER_CHAT_ID_ENV}. Using default: {DEFAULT_OWNER_CHAT_ID}")
+        OWNER_CHAT_ID = DEFAULT_OWNER_CHAT_ID
+else:
+    logger.info(f"OWNER_CHAT_ID not found in environment variables. Using default: {DEFAULT_OWNER_CHAT_ID}")
+    OWNER_CHAT_ID = DEFAULT_OWNER_CHAT_ID
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
@@ -195,6 +213,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # 🚀 START
 def main():
+    install_dependencies()
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
