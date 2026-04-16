@@ -8,16 +8,17 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 OWNER_CHAT_ID = 7567850330
 
-if not TELEGRAM_TOKEN:
-    raise ValueError("Нет TELEGRAM_TOKEN")
+if not TELEGRAM_TOKEN: 
+raise ValueError("Нет TELEGRAM_TOKEN")
 
 if not OPENAI_API_KEY:
-    raise ValueError("Нет OPENAI_API_KEY")
+raise ValueError("Нет OPENAI_API_KEY")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 # 📊 СОСТОЯНИЕ
 user_states = {}
+user_histories = {}
 
 # 🧠 GPT ПРОДАЖА (коротко + язык)
 SYSTEM_PROMPT = """Ты менеджер агентства Virus Media.
@@ -40,77 +41,97 @@ SYSTEM_PROMPT = """Ты менеджер агентства Virus Media.
 
 # 🔥 GPT функция
 async def ask_gpt(user_id, text):
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": text}
-            ]
-        )
-        return response.choices[0].message.content
-    except:
-        return "Напишите ещё раз?"
+if user_id not in user_histories:
+user_histories[user_id] = []
+
+# добавляем сообщение пользователя
+user_histories[user_id].append({
+"role": "user",
+"content": text
+})
+
+# ограничиваем память (очень важно)
+user_histories[user_id] = user_histories[user_id][-10:]
+
+messages = [{"role": "system", "content": SYSTEM_PROMPT}] + user_histories[user_id]
+
+try:
+response = client.chat.completions.create(
+model="gpt-4o-mini",
+messages=messages
+)
+reply = response.choices[0].message.content
+except Exception as e:
+print("Ошибка GPT:", e)
+return "Попробуйте ещё раз"
+
+# сохраняем ответ GPT
+user_histories[user_id].append({
+"role": "assistant",
+"content": reply
+})
+
+return reply
 
 # 🔥 ОБЩАЯ ЛОГИКА
 async def process(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
-    user_id = update.message.from_user.id
-    user_name = update.message.from_user.first_name
+user_id = update.message.from_user.id
+user_name = update.message.from_user.first_name
 
-    if user_id not in user_states:
-        user_states[user_id] = {
-            "step": "name",
-            "data": {}
-        }
+if user_id not in user_states:
+user_states[user_id] = {
+"step": "name",
+"data": {}
+}
 
-    state = user_states[user_id]
+state = user_states[user_id]
 
-    # 1️⃣ ИМЯ
-    if state["step"] == "name":
-        state["data"]["name"] = text
-        state["step"] = "phone"
+# 1️⃣ ИМЯ
+if state["step"] == "name":
+state["data"]["name"] = text
+state["step"] = "phone"
 
-        reply = await ask_gpt(user_id, "Клиент оставил имя, задай следующий вопрос про телефон")
-        await update.message.reply_text(reply)
-        return
+reply = await ask_gpt(user_id, "Клиент оставил имя, задай следующий вопрос про телефон")
+await update.message.reply_text(reply)
+return
 
-    # 2️⃣ ТЕЛЕФОН
-    elif state["step"] == "phone":
-        state["data"]["phone"] = text
-        state["step"] = "interest"
+# 2️⃣ ТЕЛЕФОН
+elif state["step"] == "phone":
+state["data"]["phone"] = text
+state["step"] = "interest"
 
-        reply = await ask_gpt(user_id, "Спроси что интересует: AI аватар, продвижение или AI агент")
-        await update.message.reply_text(reply)
-        return
+reply = await ask_gpt(user_id, "Спроси что интересует: AI аватар, продвижение или AI агент")
+await update.message.reply_text(reply)
+return
 
-    # 3️⃣ ИНТЕРЕС
-    elif state["step"] == "interest":
-        state["data"]["interest"] = text
-        state["step"] = "format"
+# 3️⃣ ИНТЕРЕС
+elif state["step"] == "interest":
+state["data"]["interest"] = text
+state["step"] = "format"
 
-        reply = await ask_gpt(user_id, "Объясни кратко пользу и спроси Zoom или офлайн")
-        await update.message.reply_text(reply)
-        return
+reply = await ask_gpt(user_id, "Объясни кратко пользу и спроси Zoom или офлайн")
+await update.message.reply_text(reply)
+return
 
-    # 4️⃣ ФОРМАТ
-    elif state["step"] == "format":
-        state["data"]["format"] = text
-        state["step"] = "time"
+# 4️⃣ ФОРМАТ
+elif state["step"] == "format":
+state["data"]["format"] = text
+state["step"] = "time"
 
-        reply = await ask_gpt(user_id, "Спроси удобное время для встречи")
-        await update.message.reply_text(reply)
-        return
+reply = await ask_gpt(user_id, "Спроси удобное время для встречи")
+await update.message.reply_text(reply)
+return
 
-    # 5️⃣ ВРЕМЯ
-    elif state["step"] == "time":
-        state["data"]["time"] = text
+# 5️⃣ ВРЕМЯ
+elif state["step"] == "time":
+state["data"]["time"] = text
 
-        data = state["data"]
+data = state["data"]
 
-        # 🔥 ОТПРАВКА ЛИДА
-        await context.bot.send_message(
-            chat_id=OWNER_CHAT_ID,
-            text=f"""🔥 НОВЫЙ ЛИД!
+# 🔥 ОТПРАВКА ЛИДА
+await context.bot.send_message(
+chat_id=OWNER_CHAT_ID,
+text=f"""🔥 НОВЫЙ ЛИД!
 
 👤 Имя: {data.get('name')}
 📞 Телефон: {data.get('phone')}
@@ -120,39 +141,39 @@ async def process(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str)
 
 🆔 ID: {user_id}
 👤 Username: {user_name}"""
-        )
+)
 
-        reply = await ask_gpt(user_id, "Поблагодари и скажи что менеджер свяжется")
-        await update.message.reply_text(reply)
+reply = await ask_gpt(user_id, "Поблагодари и скажи что менеджер свяжется")
+await update.message.reply_text(reply)
 
-        user_states.pop(user_id)
-        return
+user_states.pop(user_id)
+return
 
 
 # 🔤 ТЕКСТ
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    await process(update, context, text)
+text = update.message.text
+await process(update, context, text)
 
 
 # 🎤 ГОЛОС
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    voice = await update.message.voice.get_file()
-    file_path = "voice.ogg"
-    await voice.download_to_drive(file_path)
+voice = await update.message.voice.get_file()
+file_path = "voice.ogg"
+await voice.download_to_drive(file_path)
 
-    try:
-        with open(file_path, "rb") as audio:
-            transcript = client.audio.transcriptions.create(
-                model="gpt-4o-mini-transcribe",
-                file=audio
-            )
-        text = transcript.text
-    except:
-        await update.message.reply_text("Не понял голос")
-        return
+try:
+with open(file_path, "rb") as audio:
+transcript = client.audio.transcriptions.create(
+model="gpt-4o-mini-transcribe",
+file=audio
+)
+text = transcript.text
+except:
+await update.message.reply_text("Не понял голос")
+return
 
-    await process(update, context, text)
+await process(update, context, text)
 
 
 # 🚀 ЗАПУСК
