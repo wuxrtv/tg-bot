@@ -22,41 +22,42 @@ sent_leads = set()
 SYSTEM_PROMPT = """Ты менеджер по продажам агентства Virus Media.
 
 ГЛАВНАЯ ЛОГИКА:
-— СНАЧАЛА всегда узнай ИМЯ
-— После имени начинай предлагать услуги
+— СНАЧАЛА узнай имя
+— Пока нет имени — не продавай
+— После имени предлагай услуги
 
 ЯЗЫК:
-— Отвечай только на русском или узбекском (latin)
-— Если клиент пишет на русском — отвечай на русском
-— Если на узбекском — на узбекском
-— Если непонятно — русский
+— Только русский или узбекский (latin)
+— Отвечай на языке клиента
 
 СТИЛЬ:
 — Очень коротко (1-2 предложения)
-— Без длинных текстов
 — Всегда заканчивай вопросом
 
-НАШИ УСЛУГИ (предлагай после имени):
-1. AI аватар для блога (человек не снимается — блог растёт)
-2. Продвижение блога (много аккаунтов, быстрый рост)
-3. AI агенты (автоматизация бизнеса и продаж)
+УСЛУГИ:
+1. AI аватар (блог без съёмок)
+2. Продвижение (много аккаунтов)
+3. AI агенты (автоматизация)
 
 ПРОДАЖА:
-— Говори через выгоду
-— Если спрашивают цену: от $200, детали на консультации
-— Предлагай консультацию
+— Через выгоду
+— Цена: от $200
+— Веди к консультации
 
-СБОР ДАННЫХ (по порядку):
-1. Имя (СНАЧАЛА!)
+СБОР ДАННЫХ:
+1. Имя
 2. Телефон
 3. Интерес
-4. Время
+4. Формат встречи (Zoom или офлайн)
+5. Удобное время
 
 После всех данных напиши:
-ДАННЫЕ_КЛИЕНТА: имя | телефон | интерес | время
+ДАННЫЕ_КЛИЕНТА: имя | телефон | интерес | формат | время
 
-И продолжай коротко."""
-# 🔥 Функция общения с GPT
+Потом скажи что менеджер свяжется.
+"""
+
+# 🔥 GPT функция
 async def ask_gpt(user_id, text):
     if user_id not in user_histories:
         user_histories[user_id] = []
@@ -76,24 +77,23 @@ async def ask_gpt(user_id, text):
         reply = response.choices[0].message.content
     except Exception as e:
         print("Ошибка OpenAI:", e)
-        return "⚠️ Временно ошибка сервера, попробуй позже"
+        return "Ошибка, попробуй позже"
 
     user_histories[user_id].append({"role": "assistant", "content": reply})
     return reply
 
 
-# 🔥 ОБРАБОТКА ТЕКСТА
+# 🔥 ТЕКСТ
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     user_name = update.message.from_user.first_name
     text = update.message.text
 
     reply = await ask_gpt(user_id, text)
-
     await process_reply(update, context, reply, user_id, user_name)
 
 
-# 🔥 ОБРАБОТКА ГОЛОСА
+# 🔥 ГОЛОС
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     user_name = update.message.from_user.first_name
@@ -108,19 +108,17 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 model="gpt-4o-mini-transcribe",
                 file=audio
             )
-
         text = transcript.text
     except Exception as e:
         print("Ошибка распознавания:", e)
-        await update.message.reply_text("Не смог распознать голос 😢")
+        await update.message.reply_text("Не смог распознать голос")
         return
 
     reply = await ask_gpt(user_id, text)
-
     await process_reply(update, context, reply, user_id, user_name)
 
 
-# 🔥 ОБЩАЯ ЛОГИКА
+# 🔥 ОБРАБОТКА ОТВЕТА
 async def process_reply(update, context, reply, user_id, user_name):
     if "ДАННЫЕ_КЛИЕНТА:" in reply:
         clean_reply = reply.split("ДАННЫЕ_КЛИЕНТА:")[0].strip()
@@ -136,7 +134,8 @@ async def process_reply(update, context, reply, user_id, user_name):
                 name = parts[0].strip() if len(parts) > 0 else "—"
                 phone = parts[1].strip() if len(parts) > 1 else "—"
                 interests = parts[2].strip() if len(parts) > 2 else "—"
-                time = parts[3].strip() if len(parts) > 3 else "—"
+                format_meet = parts[3].strip() if len(parts) > 3 else "—"
+                time = parts[4].strip() if len(parts) > 4 else "—"
 
                 await context.bot.send_message(
                     chat_id=OWNER_CHAT_ID,
@@ -144,11 +143,12 @@ async def process_reply(update, context, reply, user_id, user_name):
 
 👤 Имя: {name}
 📞 Телефон: {phone}
-💡 Интересы: {interests}
+💡 Интерес: {interests}
+📍 Формат: {format_meet}
 🕐 Время: {time}
 
-🆔 Telegram ID: {user_id}
-👤 Telegram имя: {user_name}"""
+🆔 ID: {user_id}
+👤 Username: {user_name}"""
                 )
             except Exception as e:
                 print("Ошибка обработки лида:", e)
