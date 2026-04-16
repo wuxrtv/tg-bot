@@ -3,199 +3,100 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
 from openai import OpenAI
 
-# 🔑 КЛЮЧИ
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 OWNER_CHAT_ID = 7567850330
 
-if not TELEGRAM_TOKEN:
-    raise ValueError("Нет TELEGRAM_TOKEN")
-
-if not OPENAI_API_KEY:
-    raise ValueError("Нет OPENAI_API_KEY")
-
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# 📊 СОСТОЯНИЕ
-user_states = {}
 user_histories = {}
+sent_leads = set()
 
-# 🧠 GPT ПРОДАЖА
-SYSTEM_PROMPT = """
-Ты живой менеджер агентства Virus Media.
+SYSTEM_PROMPT = """Ты топовый менеджер по продажам маркетингового агентства Virus Media. Твоя главная цель — ПРОДАТЬ услуги и записать клиента на консультацию.
 
-Твоя задача — общаться как реальный человек в переписке, а не как бот.
+НАШИ УСЛУГИ:
 
-СТИЛЬ:
-— дружелюбный, живой, естественный
-— 1–2 коротких предложения
-— всегда задаёшь вопрос
-— не выглядишь как анкета или форма
+1. AI-АВАТАР ДЛЯ БЛОГА
+— Создаём цифрового аватара человека на основе его внешности и голоса
+— Аватар ведёт блог от лица клиента без его участия
+— Клиент зарабатывает и растёт в соцсетях пока спит!
 
-ЛОГИКА ОБЩЕНИЯ:
+2. ВЕДЕНИЕ АККАУНТОВ (КЛИПИНГ)
+— Берём контент клиента и распространяем на 10-20 аккаунтах одновременно
+— Клиент растёт в 10-20 раз быстрее конкурентов
+— Работаем с Instagram, TikTok, YouTube Shorts, Telegram
 
-1. Если человек написал впервые:
-— приветствуешь
-— мягко спрашиваешь имя
+3. КОМПЛЕКСНОЕ ПРОДВИЖЕНИЕ
+— AI-аватар + клипинг на множестве аккаунтов
+— Полное ведение без участия клиента
 
-2. После имени:
-— представься
-— кратко расскажи, чем занимается агентство
-— НЕ перегружай, 1–2 услуги максимум
+ПРАВИЛА ПРОДАЖ:
+— Всегда подчёркивай выгоду для клиента
+— Создавай срочность — говори что места ограничены
+— Если клиент сомневается — предложи БЕСПЛАТНУЮ консультацию
+— Если спрашивают цену — скажи от $200 но сначала нужна консультация
+— Всегда заканчивай вопросом чтобы продолжить диалог
+— Никогда не сдавайся — если клиент говорит нет найди другой аргумент
 
-3. Потом:
-— выясни интерес
-— плавно подводи к консультации
+СБОР ДАННЫХ — делай по порядку:
+1. Сначала спроси ИМЯ
+2. Потом спроси НОМЕР ТЕЛЕФОНА
+3. Потом спроси что именно интересует
+4. Потом спроси УДОБНОЕ ВРЕМЯ для консультации
+5. Когда получишь все четыре данных напиши в конце: ДАННЫЕ_КЛИЕНТА: [имя] | [телефон] | [интересы] | [время]
+6. После этого продолжай разговор — поблагодари и скажи что менеджер свяжется в указанное время
 
-УСЛУГИ:
-1. AI аватар (блог без съёмки)
-2. Продвижение (рост через соцсети)
-3. AI агенты (автоматизация бизнеса)
+важно на коком языке был задан вопрос Отвечай на узбекском или  русском  """
 
-ВАЖНО:
-— не задавай много вопросов сразу
-— не используй списки как робот
-— звучать как реальный человек в WhatsApp/Telegram
-"""
-# 🔥 GPT функция
-async def ask_gpt(user_id, text):
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_message = update.message.text
+    user_name = update.message.from_user.first_name
+    user_id = update.message.from_user.id
+
     if user_id not in user_histories:
         user_histories[user_id] = []
 
     user_histories[user_id].append({
         "role": "user",
-        "content": text
+        "content": user_message
     })
 
-    user_histories[user_id] = user_histories[user_id][-10:]
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages += user_histories[user_id]
 
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + user_histories[user_id]
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=messages
+    )
 
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=messages
-        )
-        reply = response.choices[0].message.content
-    except Exception as e:
-        print("Ошибка GPT:", e)
-        return "Попробуйте ещё раз"
+    reply = response.choices[0].message.content
 
     user_histories[user_id].append({
         "role": "assistant",
         "content": reply
     })
 
-    return reply
+    if "ДАННЫЕ_КЛИЕНТА:" in reply:
+        clean_reply = reply.split("ДАННЫЕ_КЛИЕНТА:")[0].strip()
+        await update.message.reply_text(clean_reply)
 
+        if user_id not in sent_leads:
+            sent_leads.add(user_id)
+            data = reply.split("ДАННЫЕ_КЛИЕНТА:")[1].strip()
+            parts = data.split("|")
+            name = parts[0].strip() if len(parts) > 0 else "—"
+            phone = parts[1].strip() if len(parts) > 1 else "—"
+            interests = parts[2].strip() if len(parts) > 2 else "—"
+            time = parts[3].strip() if len(parts) > 3 else "—"
 
-# 🔥 ОСНОВНАЯ ЛОГИКА
-async def process(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
-    user_id = update.message.from_user.id
-    user_name = update.message.from_user.first_name
-
-    if user_id not in user_states:
-        user_states[user_id] = {
-            "step": "name",
-            "data": {}
-        }
-
-    state = user_states[user_id]
-
-    # 1️⃣ ИМЯ
-    if state["step"] == "name":
-        state["data"]["name"] = text
-        state["step"] = "phone"
-
-        reply = await ask_gpt(user_id, "Клиент оставил имя, задай вопрос про телефон")
-        await update.message.reply_text(reply)
-        return
-
-    # 2️⃣ ТЕЛЕФОН
-    elif state["step"] == "phone":
-        state["data"]["phone"] = text
-        state["step"] = "interest"
-
-        reply = await ask_gpt(user_id, "Спроси что интересует: AI аватар, продвижение или AI агент")
-        await update.message.reply_text(reply)
-        return
-
-    # 3️⃣ ИНТЕРЕС
-    elif state["step"] == "interest":
-        state["data"]["interest"] = text
-        state["step"] = "format"
-
-        reply = await ask_gpt(user_id, "Объясни пользу и спроси Zoom или офлайн")
-        await update.message.reply_text(reply)
-        return
-
-    # 4️⃣ ФОРМАТ
-    elif state["step"] == "format":
-        state["data"]["format"] = text
-        state["step"] = "time"
-
-        reply = await ask_gpt(user_id, "Спроси удобное время встречи")
-        await update.message.reply_text(reply)
-        return
-
-    # 5️⃣ ВРЕМЯ
-    elif state["step"] == "time":
-        state["data"]["time"] = text
-        data = state["data"]
-
-        await context.bot.send_message(
-            chat_id=OWNER_CHAT_ID,
-            text=f"""🔥 НОВЫЙ ЛИД!
-
-👤 Имя: {data.get('name')}
-📞 Телефон: {data.get('phone')}
-💡 Интерес: {data.get('interest')}
-📍 Формат: {data.get('format')}
-🕐 Время: {data.get('time')}
-
-🆔 ID: {user_id}
-👤 Username: {user_name}"""
-        )
-
-        reply = await ask_gpt(user_id, "Поблагодари и скажи что менеджер свяжется")
-        await update.message.reply_text(reply)
-
-        user_states.pop(user_id)
-        return
-
-
-# 🔤 ТЕКСТ
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    await process(update, context, text)
-
-
-# 🎤 ГОЛОС
-async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    voice = await update.message.voice.get_file()
-    file_path = "voice.ogg"
-    await voice.download_to_drive(file_path)
-
-    try:
-        with open(file_path, "rb") as audio:
-            transcript = client.audio.transcriptions.create(
-                model="gpt-4o-mini-transcribe",
-                file=audio
+            await context.bot.send_message(
+                chat_id=OWNER_CHAT_ID,
+                text=f"🔥 НОВЫЙ ЛИД!\n\n👤 Имя: {name}\n📞 Телефон: {phone}\n💡 Интересы: {interests}\n🕐 Время: {time}\n\n🆔 Telegram ID: {user_id}\n👤 Telegram имя: {user_name}"
             )
-        text = transcript.text
-    except Exception as e:
-        print("Voice error:", e)
-        await update.message.reply_text("Не понял голос")
-        return
+    else:
+        await update.message.reply_text(reply)
 
-    await process(update, context, text)
-
-
-# 🚀 ЗАПУСК
 app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-app.add_handler(MessageHandler(filters.VOICE, handle_voice))
-
-print("Бот работает 🚀")
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+print("Бот запущен!")
 app.run_polling()
