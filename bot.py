@@ -23,7 +23,7 @@ if not TELEGRAM_TOKEN:
 if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY не найден.")
 
-try
+try:
     OWNER_CHAT_ID = int(OWNER_CHAT_ID_ENV) if OWNER_CHAT_ID_ENV else DEFAULT_OWNER_CHAT_ID
 except ValueError:
     OWNER_CHAT_ID = DEFAULT_OWNER_CHAT_ID
