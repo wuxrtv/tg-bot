@@ -330,5 +330,6 @@ def main():
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
     logger.info("Роберт запущен.")
     app.run_polling(drop_pending_updates=True)
-    if __name__ == "__main__":
+    
+if __name__ == "__main__":
     main()
