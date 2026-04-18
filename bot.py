@@ -233,12 +233,24 @@ async def process_reply(reply, update, context, user_id, tg_username):
 
 async def process_user_input(text, update, context):
     user_id = update.message.from_user.id
+    message_id = update.message.message_id
     user_name = update.message.from_user.username or update.message.from_user.first_name or "unknown"
+
+    # Проверяем не обрабатывали ли уже это сообщение
+    redis_key = f"msg:{user_id}:{message_id}"
+    if r.exists(redis_key):
+        logger.warning(f"[{user_id}] сообщение {message_id} уже обработано, пропускаем.")
+        return
+    # Ставим метку на 60 секунд
+    r.set(redis_key, "1", ex=60)
+
     if user_id not in user_locks:
         user_locks[user_id] = asyncio.Lock()
+
     if user_locks[user_id].locked():
-        logger.warning(f"[{user_id}] дубль пропущен.")
+        logger.warning(f"[{user_id}] уже обрабатывается, дубль пропущен.")
         return
+
     async with user_locks[user_id]:
         reply = await ask_gpt(user_id, text)
         await process_reply(reply, update, context, user_id, user_name)
