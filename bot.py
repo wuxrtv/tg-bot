@@ -4,7 +4,6 @@ import logging
 import uuid
 import asyncio
 import redis
-
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
 from openai import OpenAI
