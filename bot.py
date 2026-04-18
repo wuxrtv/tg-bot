@@ -20,7 +20,7 @@ DEFAULT_OWNER_CHAT_ID = 7567850330
 
 if not TELEGRAM_TOKEN:
     raise ValueError("TELEGRAM_TOKEN не найден.")
-if not OPENAI_API_KEY
+if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY не найден.")
 
 try
