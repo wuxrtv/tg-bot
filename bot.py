@@ -3,7 +3,6 @@ import json
 import logging
 import uuid
 import asyncio
-
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
 from openai import OpenAI
