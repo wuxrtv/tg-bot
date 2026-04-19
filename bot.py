@@ -62,17 +62,17 @@ def mark_lead_sent(user_id):
 
 
 SYSTEM_PROMPT = """
-Ty — Robert, starshiy menedjer po rabote s klientami marketingovogo agentstva Virus Media.
-Ty jivoy, tyoplyy, uverenny chelovek. Govorysh prosto i po delu.
-Nikogda ne govori chto ty bot ili ИИ. Ty — Robert, jivoy sotrudnik.
+Ты — Роберт, старший менеджер по работе с клиентами маркетингового агентства Virus Media.
+Ты живой, тёплый, уверенный человек. Говоришь просто и по делу.
+Никогда не говори что ты бот или ИИ. Ты — Роберт, живой сотрудник.
 
-YAZYK:
-- Opredelяй yazyk po PERVOMU soobsheniyu klienta.
-- Klient napisal na RUSSKOM — otvechay na russkom, sprosi: "Продолжим на русском языке?"
-- Klient napisal na UZBEKSKOM — otvechay na uzbekskom, sprosi: "O'zbek tilida davom etamizmi?"
-- Klient napisal na LYUBOM DRUGOM yazyke — otvechay na russkom, sprosi: "Продолжим на русском или предпочитаете узбекский?"
-- Posle podtverjeniya — obshaysya TOLKO na vybrannom yazyke do konca.
-- NIKOGDA ne pishi odno soobshenie srazu na dvuh yazykah.
+ЯЗЫК:
+- Определи язык по ПЕРВОМУ сообщению клиента.
+- Клиент написал на РУССКОМ — отвечай на русском, спроси: "Продолжим на русском языке?"
+- Клиент написал на УЗБЕКСКОМ — отвечай на узбекском, спроси: "O'zbek tilida davom etamizmi?"
+- Клиент написал на ЛЮБОМ ДРУГОМ языке — отвечай на русском, спроси: "Продолжим на русском или предпочитаете узбекский?"
+- После подтверждения — общайся ТОЛЬКО на выбранном языке до конца.
+- НИКОГДА не пиши одно сообщение сразу на двух языках.
 
 ПОРЯДОК ДИАЛОГА:
 
@@ -145,20 +145,29 @@ async def ask_gpt(user_id, text):
     history = load_history(user_id)
     history.append({"role": "user", "content": text})
     messages = [{"role": "system", "content": SYSTEM_PROMPT}] + history[-24:]
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=messages,
-            temperature=0.75,
-            max_tokens=500,
-        )
-        reply = response.choices[0].message.content.strip()
-    except Exception as e:
-        logger.error(f"OpenAI error: {e}")
-        return "Прошу прощения, что-то пошло не так. Напишите чуть позже."
-    history.append({"role": "assistant", "content": reply})
-    save_history(user_id, history)
-    return reply
+
+    # Пробуем до 3 раз
+    for attempt in range(3):
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=messages,
+                temperature=0.75,
+                max_tokens=500,
+                timeout=30,
+            )
+            reply = response.choices[0].message.content.strip()
+            history.append({"role": "assistant", "content": reply})
+            save_history(user_id, history)
+            return reply
+        except Exception as e:
+            logger.error(f"OpenAI error attempt {attempt + 1}: {e}")
+            if attempt < 2:
+                await asyncio.sleep(2)  # Ждём 2 секунды перед повтором
+            else:
+                return None
+
+    return None
 
 
 async def send_lead_to_owner(context, user_id, tg_username, raw_data):
@@ -235,23 +244,29 @@ async def process_user_input(text, update, context):
     message_id = update.message.message_id
     user_name = update.message.from_user.username or update.message.from_user.first_name or "unknown"
 
-    # Проверяем не обрабатывали ли уже это сообщение
+    # Защита от дублей через Redis
     redis_key = f"msg:{user_id}:{message_id}"
-    if r.exists(redis_key):
-        logger.warning(f"[{user_id}] сообщение {message_id} уже обработано, пропускаем.")
-        return
-    # Ставим метку на 60 секунд
-    r.set(redis_key, "1", ex=60)
+    try:
+        if r.exists(redis_key):
+            logger.warning(f"[{user_id}] сообщение {message_id} уже обработано, пропускаем.")
+            return
+        r.set(redis_key, "1", ex=60)
+    except Exception as e:
+        logger.error(f"Redis dedup error: {e}")
 
     if user_id not in user_locks:
         user_locks[user_id] = asyncio.Lock()
 
     if user_locks[user_id].locked():
-        logger.warning(f"[{user_id}] уже обрабатывается, дубль пропущен.")
+        logger.warning(f"[{user_id}] уже обрабатывается, пропускаем.")
         return
 
     async with user_locks[user_id]:
         reply = await ask_gpt(user_id, text)
+        if reply is None:
+            # Все 3 попытки не удались — молчим, не пишем ошибку клиенту
+            logger.error(f"[{user_id}] GPT не ответил после 3 попыток.")
+            return
         await process_reply(reply, update, context, user_id, user_name)
 
 
@@ -266,7 +281,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await process_user_input(user_message, update, context)
     except Exception as e:
         logger.error(f"handle_message error: {e}")
-        await update.message.reply_text("Что-то пошло не так. Напишите ещё раз.")
 
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -276,18 +290,33 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         voice_file = await update.message.voice.get_file()
         file_path = f"/tmp/voice_{user_id}_{uuid.uuid4().hex}.ogg"
         await voice_file.download_to_drive(file_path)
-        with open(file_path, "rb") as audio:
-            transcript = client.audio.transcriptions.create(model="whisper-1", file=audio)
-        os.remove(file_path)
-        text = transcript.text.strip()
+
+        # Транскрибируем с таймаутом
+        try:
+            with open(file_path, "rb") as audio:
+                transcript = client.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=audio,
+                    timeout=30,
+                )
+            text = transcript.text.strip()
+        except Exception as e:
+            logger.error(f"Whisper error: {e}")
+            if os.path.exists(file_path):
+                os.remove(file_path)
+            return  # Молчим при ошибке голосового
+        finally:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+
         if not text:
-            await update.message.reply_text("Не смог разобрать голосовое — попробуйте написать текстом.")
             return
+
         logger.info(f"[VOICE] [{user_id}] @{user_name}: {text}")
         await process_user_input(text, update, context)
+
     except Exception as e:
         logger.error(f"handle_voice error: {e}")
-        await update.message.reply_text("Не смог обработать голосовое. Попробуйте написать текстом.")
 
 
 def main():
