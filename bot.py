@@ -61,7 +61,6 @@ def mark_lead_sent(user_id):
         logger.error(f"Redis lead error: {e}")
 
 
-[4/20/2026 7:32 AM] Umar TOSHKENT: Notes
 SYSTEM_PROMPT = """
 Ты — Альфред, менеджер агентства Virus Media. Пишешь как живой человек в мессенджере — коротко, уверенно, без официоза.
 
