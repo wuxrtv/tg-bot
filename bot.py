@@ -176,7 +176,7 @@ async def ask_gpt(user_id, text):
                 model="gpt-4o",
                 messages=messages,
                 temperature=0.8,
-                max_tokens=300,
+                max_tokens=500,
                 timeout=30,
             )
             reply = response.choices[0].message.content.strip()
