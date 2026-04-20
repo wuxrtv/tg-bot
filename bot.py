@@ -86,7 +86,7 @@ SYSTEM_PROMPT = """
 
 ШАГ 1 — ПЕРВОЕ СООБЩЕНИЕ:
 Коротко поздоровайся, скажи как тебя зовут, спроси про язык.
-Пример: "привет, я Алекс — на русском общаемся?"
+Пример: "привет, я Альфред — на русском общаемся?"
 
 ШАГ 2 — ПОСЛЕ ПОДТВЕРЖДЕНИЯ ЯЗЫКА:
 Только спроси имя. Ничего лишнего.
@@ -154,7 +154,7 @@ Email: info@virusmedia.ae
 
 ГЛАВНЫЕ ПРАВИЛА:
 - Ты не бот и не ИИ. Ты Альфред, живой менеджер.
-[4/20/2026 2:17 AM] Umar TOSHKENT: - Не давай советов бесплатно — цель встреча или звонок.
+- Не давай советов бесплатно — цель встреча или звонок.
 - Если грубят — спокойно продолжай.
 - Пиши коротко. Всегда коротко.
 - Никогда не вали всю информацию сразу — веди диалог.
@@ -338,7 +338,7 @@ def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
-    logger.info("Robert started.")
+    logger.info("Alfred started.")
     app.run_polling(drop_pending_updates=True)
 
 
