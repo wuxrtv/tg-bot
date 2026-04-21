@@ -4,7 +4,10 @@ import logging
 import uuid
 import asyncio
 import tempfile
+from datetime import datetime
 import redis
+import gspread
+from google.oauth2.service_account import Credentials
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
 from openai import AsyncOpenAI
@@ -30,6 +33,21 @@ except ValueError:
 
 client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 r = redis.from_url(REDIS_URL, decode_responses=True)
+
+SHEETS_KEY_FILE = os.path.join(os.path.dirname(__file__), "virusmedia-22436d81e0ae.json")
+SPREADSHEET_ID = "1Llr_XlNo_8deyOy9RraaVsB5Q9JlEd2dXKEJUu39RGI"
+
+try:
+    _creds = Credentials.from_service_account_file(
+        SHEETS_KEY_FILE,
+        scopes=["https://www.googleapis.com/auth/spreadsheets"],
+    )
+    _gc = gspread.authorize(_creds)
+    _sheet = _gc.open_by_key(SPREADSHEET_ID).sheet1
+    logger.info("Google Sheets подключён.")
+except Exception as e:
+    _sheet = None
+    logger.error(f"Google Sheets ошибка подключения: {e}")
 
 
 def load_history(user_id):
@@ -158,16 +176,24 @@ UPSELL — только после интереса к первой услуге
 Когда клиент заинтересован — предложи встречу естественно:
 "давай созвонимся на 15 минут — покажу подробнее. зум удобен или живая встреча?"
 
+Если клиент спрашивает "с кем буду общаться?" или "кто будет на звонке?" — отвечай:
+"с нашим менеджером" — никогда не говори "со мной"
+
 Когда назвал время:
 "ок, записал. уточню и напишу"
 
 Затем в конце сообщения на новой строке добавь (клиент НЕ увидит):
 СОГЛАСОВАНИЕ_ВРЕМЕНИ: ИМЯ | ВРЕМЯ | ФОРМАТ
 
+СБОР НОМЕРА ТЕЛЕФОНА:
+Когда клиент согласился на встречу или звонок — спроси номер телефона:
+"кстати, на какой номер написать подтверждение?"
+Никогда не спрашивай username или Telegram ID — только номер телефона.
+
 СБОР ЛИДА:
-Собирай по ходу: имя, контакт, интерес, формат встречи, время.
+Собирай по ходу: имя, номер телефона, интерес, формат встречи, время.
 Когда все 5 собраны — в конце сообщения на новой строке добавь (клиент НЕ увидит):
-ДАННЫЕ_КЛИЕНТА: ИМЯ | КОНТАКТ | ИНТЕРЕС | ФОРМАТ | ВРЕМЯ
+ДАННЫЕ_КЛИЕНТА: ИМЯ | НОМЕР ТЕЛЕФОНА | ИНТЕРЕС | ФОРМАТ | ВРЕМЯ
 После этой строки — никакого текста.
 
 ОБ ОСНОВАТЕЛЕ — если спрашивают:
@@ -284,6 +310,15 @@ async def send_lead_to_owner(context, user_id, tg_username, raw_data):
         )
         mark_lead_sent(user_id)
         logger.info(f"Лид отправлен: {name}")
+        if _sheet:
+            try:
+                _sheet.append_row([
+                    name, contact, interest, fmt, time,
+                    str(user_id), datetime.now().strftime("%d.%m.%Y %H:%M"),
+                ])
+                logger.info(f"Лид записан в Google Sheets: {name}")
+            except Exception as e:
+                logger.error(f"Ошибка записи в Sheets: {e}")
     except Exception as e:
         logger.error(f"Ошибка отправки лида: {e}")
 
