@@ -34,12 +34,18 @@ except ValueError:
 client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 r = redis.from_url(REDIS_URL, decode_responses=True)
 
-SHEETS_KEY_FILE = os.path.join(os.path.dirname(__file__), "virusmedia-22436d81e0ae.json")
 SPREADSHEET_ID = "1Llr_XlNo_8deyOy9RraaVsB5Q9JlEd2dXKEJUu39RGI"
 
 try:
-    _creds = Credentials.from_service_account_file(
-        SHEETS_KEY_FILE,
+    _creds_json = os.environ.get("GOOGLE_SHEETS_CREDS")
+    if _creds_json:
+        _creds_info = json.loads(_creds_json)
+    else:
+        _key_file = os.path.join(os.path.dirname(__file__), "virusmedia-22436d81e0ae.json")
+        with open(_key_file) as f:
+            _creds_info = json.load(f)
+    _creds = Credentials.from_service_account_info(
+        _creds_info,
         scopes=["https://www.googleapis.com/auth/spreadsheets"],
     )
     _gc = gspread.authorize(_creds)
