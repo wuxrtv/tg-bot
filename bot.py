@@ -3,10 +3,11 @@ import json
 import logging
 import uuid
 import asyncio
+import tempfile
 import redis
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
-from openai import OpenAI
+from openai import AsyncOpenAI
 
 logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -27,7 +28,7 @@ try:
 except ValueError:
     OWNER_CHAT_ID = DEFAULT_OWNER_CHAT_ID
 
-client = OpenAI(api_key=OPENAI_API_KEY)
+client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 r = redis.from_url(REDIS_URL, decode_responses=True)
 
 
@@ -236,7 +237,7 @@ async def ask_gpt(user_id, text):
 
     for attempt in range(3):
         try:
-            response = client.chat.completions.create(
+            response = await client.chat.completions.create(
                 model="gpt-4o",
                 messages=messages,
                 temperature=0.85,
@@ -346,13 +347,14 @@ async def process_user_input(text, update, context):
     if user_locks[user_id].locked():
         logger.warning(f"[{user_id}] уже обрабатывается — ждём.")
         try:
-            async with asyncio.timeout(60):
+            async def _process():
                 async with user_locks[user_id]:
                     reply = await ask_gpt(user_id, text)
                     if reply is None:
                         logger.error(f"[{user_id}] GPT не ответил.")
                         return
                     await process_reply(reply, update, context, user_id, user_name)
+            await asyncio.wait_for(_process(), timeout=60)
         except asyncio.TimeoutError:
             logger.error(f"[{user_id}] таймаут ожидания лока.")
         return
@@ -389,11 +391,11 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_voice_queue[user_id] = True
     try:
         voice_file = await update.message.voice.get_file()
-        file_path = f"/tmp/voice_{user_id}_{uuid.uuid4().hex}.ogg"
+        file_path = os.path.join(tempfile.gettempdir(), f"voice_{user_id}_{uuid.uuid4().hex}.ogg")
         await voice_file.download_to_drive(file_path)
         try:
             with open(file_path, "rb") as audio:
-                transcript = client.audio.transcriptions.create(
+                transcript = await client.audio.transcriptions.create(
                     model="whisper-1",
                     file=audio,
                     timeout=30,
@@ -413,7 +415,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await process_user_input(text, update, context)
 
     except Exception as e:
-        logger.error(f"handle_voice error: {e}")
+        logger.error(f"handle_voice error: {e}") 
     finally:
         user_voice_queue[user_id] = False
 
