@@ -442,8 +442,11 @@ async def process_user_input(text, update, context):
 
 
 async def handle_owner_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.lower().strip()
-    if "отчет" in text or "отчёт" in text or "лиды" in text or "hisobot" in text:
+    text = update.message.text.strip()
+    lower = text.lower()
+
+    # ОТЧЕТ
+    if any(w in lower for w in ["отчет", "отчёт", "лиды", "hisobot"]):
         try:
             if _sheet:
                 rows = _sheet.get_all_values()
@@ -463,8 +466,51 @@ async def handle_owner_message(update: Update, context: ContextTypes.DEFAULT_TYP
                 await update.message.reply_text("Google Sheets не подключён.")
         except Exception as e:
             await update.message.reply_text(f"Ошибка: {e}")
+
+    # ИСТОРИЯ [telegram_id]
+    elif lower.startswith("история"):
+        parts = text.split(maxsplit=1)
+        if len(parts) < 2:
+            await update.message.reply_text("Укажи Telegram ID. Пример:\nистория 123456789")
+            return
+        target_id = parts[1].strip()
+        history = load_history(target_id)
+        if not history:
+            await update.message.reply_text(f"История для {target_id} не найдена.")
+            return
+        result = f"💬 История с {target_id}:\n\n"
+        for msg in history:
+            role = "Клиент" if msg["role"] == "user" else "Альфред"
+            result += f"{role}: {msg['content']}\n\n"
+        # Telegram лимит 4096 символов
+        if len(result) > 4000:
+            result = result[-4000:]
+        await update.message.reply_text(result)
+
+    # НАПИСАТЬ [telegram_id] [текст]
+    elif lower.startswith("написать"):
+        parts = text.split(maxsplit=2)
+        if len(parts) < 3:
+            await update.message.reply_text("Пример:\nнаписать 123456789 Привет, как дела?")
+            return
+        target_id = parts[1].strip()
+        message_text = parts[2].strip()
+        try:
+            await context.bot.send_message(chat_id=int(target_id), text=message_text)
+            history = load_history(target_id)
+            history.append({"role": "assistant", "content": message_text})
+            save_history(target_id, history)
+            await update.message.reply_text(f"✅ Сообщение отправлено клиенту {target_id}")
+        except Exception as e:
+            await update.message.reply_text(f"Ошибка отправки: {e}")
+
     else:
-        await update.message.reply_text("Привет! Доступные команды:\n— отчет (последние 10 лидов)")
+        await update.message.reply_text(
+            "Доступные команды:\n"
+            "— отчет\n"
+            "— история [telegram_id]\n"
+            "— написать [telegram_id] [текст]"
+        )
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
