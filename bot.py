@@ -8,8 +8,8 @@ from datetime import datetime
 import redis
 import gspread
 from google.oauth2.service_account import Credentials
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, CallbackQueryHandler, filters, ContextTypes
+from telegram import Update
+from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, filters, ContextTypes
 from openai import AsyncOpenAI
 
 logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO)
@@ -643,61 +643,10 @@ async def handle_owner_message(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🇷🇺 Привет", callback_data="lang_ru"),
-            InlineKeyboardButton("🇺🇿 Salom", callback_data="lang_uz"),
-        ]
-    ])
-    await update.message.reply_text(
-        "Выберите язык / Tilni tanlang:",
-        reply_markup=keyboard
-    )
-
-
-async def handle_language_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
-    user_name = query.from_user.username or query.from_user.first_name or "unknown"
-
-    if query.data == "lang_ru":
-        text = "Привет"
-    else:
-        text = "Salom"
-
-    await query.edit_message_reply_markup(reply_markup=None)
-
+    user_id = update.message.from_user.id
     if user_id == OWNER_CHAT_ID:
         return
-
-    redis_key = f"msg:{user_id}:start_{query.data}"
-    try:
-        if r.exists(redis_key):
-            return
-        r.set(redis_key, "1", ex=60)
-    except Exception:
-        pass
-
-    if user_id not in user_locks:
-        user_locks[user_id] = asyncio.Lock()
-
-    async with user_locks[user_id]:
-        reply = await ask_gpt(user_id, text)
-        if reply is None:
-            return
-        voice_path = await text_to_voice(reply)
-        if voice_path:
-            try:
-                with open(voice_path, "rb") as audio:
-                    await context.bot.send_voice(chat_id=user_id, voice=audio)
-                os.remove(voice_path)
-                return
-            except Exception as e:
-                logger.error(f"Ошибка отправки голосового: {e}")
-                if os.path.exists(voice_path):
-                    os.remove(voice_path)
-        await context.bot.send_message(chat_id=user_id, text=reply)
+    await process_user_input("привет", update, context)
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -762,7 +711,6 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", handle_start))
-    app.add_handler(CallbackQueryHandler(handle_language_choice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
     logger.info("Alfred started.")
