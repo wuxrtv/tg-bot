@@ -452,7 +452,7 @@ async def process_reply(reply, update, context, user_id, tg_username):
         clean = clean[:idx].strip()
         await save_partial_lead(user_id, tg_username, phone)
     if clean:
-        await send_voice_or_text(update, clean)
+        await update.message.reply_text(clean)
 
 
 async def process_user_input(text, update, context):
