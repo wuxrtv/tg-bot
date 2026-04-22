@@ -383,6 +383,37 @@ async def save_partial_lead(user_id, tg_username, phone):
             logger.error(f"Ошибка записи частичного лида: {e}")
 
 
+async def text_to_voice(text):
+    try:
+        response = await client.audio.speech.create(
+            model="tts-1",
+            voice="onyx",
+            input=text,
+        )
+        file_path = os.path.join(tempfile.gettempdir(), f"voice_out_{uuid.uuid4().hex}.ogg")
+        with open(file_path, "wb") as f:
+            f.write(response.content)
+        return file_path
+    except Exception as e:
+        logger.error(f"TTS error: {e}")
+        return None
+
+
+async def send_voice_or_text(update, text):
+    voice_path = await text_to_voice(text)
+    if voice_path:
+        try:
+            with open(voice_path, "rb") as audio:
+                await update.message.reply_voice(audio)
+            os.remove(voice_path)
+            return
+        except Exception as e:
+            logger.error(f"Ошибка отправки голосового: {e}")
+            if os.path.exists(voice_path):
+                os.remove(voice_path)
+    await update.message.reply_text(text)
+
+
 async def process_reply(reply, update, context, user_id, tg_username):
     clean = reply
     logger.info(f"GPT: {repr(clean)}")
@@ -402,7 +433,7 @@ async def process_reply(reply, update, context, user_id, tg_username):
         clean = clean[:idx].strip()
         await save_partial_lead(user_id, tg_username, phone)
     if clean:
-        await update.message.reply_text(clean)
+        await send_voice_or_text(update, clean)
 
 
 async def process_user_input(text, update, context):
@@ -482,8 +513,13 @@ def get_client_history(target_id):
 ADMIN_SYSTEM_PROMPT = """Ты — умный помощник администратора бота Virus Media.
 Тебе предоставлены данные о лидах и переписках с клиентами.
 Отвечай на вопросы администратора на основе этих данных.
-Если администратор хочет отправить сообщение клиенту — ответь в формате:
+
+Если администратор хочет отправить текстовое сообщение клиенту — ответь в формате:
 ОТПРАВИТЬ: [telegram_id] | [текст сообщения]
+
+Если администратор хочет отправить голосовое сообщение клиенту — ответь в формате:
+ОТПРАВИТЬ_ГОЛОС: [telegram_id] | [текст сообщения]
+
 Если администратор просит показать переписку с клиентом по имени — найди его ID в данных лидов и покажи историю.
 Отвечай кратко и по делу. Ты общаешься с владельцем агентства."""
 
@@ -526,16 +562,27 @@ async def handle_owner_message(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         reply = response.choices[0].message.content.strip()
 
-        if "ОТПРАВИТЬ:" in reply:
-            idx = reply.index("ОТПРАВИТЬ:")
-            send_data = reply[idx + len("ОТПРАВИТЬ:"):].split("\n")[0].strip()
+        if "ОТПРАВИТЬ_ГОЛОС:" in reply or "ОТПРАВИТЬ:" in reply:
+            tag = "ОТПРАВИТЬ_ГОЛОС:" if "ОТПРАВИТЬ_ГОЛОС:" in reply else "ОТПРАВИТЬ:"
+            is_voice = tag == "ОТПРАВИТЬ_ГОЛОС:"
+            idx = reply.index(tag)
+            send_data = reply[idx + len(tag):].split("\n")[0].strip()
             reply_text = reply[:idx].strip()
             parts = send_data.split("|", 1)
             if len(parts) == 2:
                 target_id = parts[0].strip()
                 message_text = parts[1].strip()
                 try:
-                    await context.bot.send_message(chat_id=int(target_id), text=message_text)
+                    if is_voice:
+                        voice_path = await text_to_voice(message_text)
+                        if voice_path:
+                            with open(voice_path, "rb") as audio:
+                                await context.bot.send_voice(chat_id=int(target_id), voice=audio)
+                            os.remove(voice_path)
+                        else:
+                            await context.bot.send_message(chat_id=int(target_id), text=message_text)
+                    else:
+                        await context.bot.send_message(chat_id=int(target_id), text=message_text)
                     hist = load_history(target_id)
                     hist.append({"role": "assistant", "content": message_text})
                     save_history(target_id, hist)
