@@ -211,6 +211,9 @@ UPSELL — только после интереса к первой услуге
 
 ВАЖНО: задавай по ОДНОМУ вопросу за раз. Не спрашивай имя и номер одновременно.
 
+Как только клиент дал номер телефона — сразу добавь в конце сообщения (клиент НЕ увидит):
+НОМЕР_ПОЛУЧЕН: НОМЕР
+
 Когда собраны все 5 данных (имя, номер, интерес, формат, время) — в конце сообщения на новой строке добавь (клиент НЕ увидит):
 ДАННЫЕ_КЛИЕНТА: ИМЯ | НОМЕР | ИНТЕРЕС | ФОРМАТ | ВРЕМЯ
 После этой строки — никакого текста. Эта строка обязательна когда все 5 данных известны.
@@ -364,6 +367,18 @@ async def send_time_request(context, user_id, tg_username, raw_data):
         logger.error(f"Ошибка запроса встречи: {e}")
 
 
+async def save_partial_lead(user_id, tg_username, phone):
+    if _sheet and not is_lead_sent(user_id):
+        try:
+            _sheet.append_row([
+                "-", phone, "-", "-", "-",
+                str(user_id), datetime.now().strftime("%d.%m.%Y %H:%M"),
+            ])
+            logger.info(f"Частичный лид записан: {phone}")
+        except Exception as e:
+            logger.error(f"Ошибка записи частичного лида: {e}")
+
+
 async def process_reply(reply, update, context, user_id, tg_username):
     clean = reply
     logger.info(f"GPT: {repr(clean)}")
@@ -377,6 +392,11 @@ async def process_reply(reply, update, context, user_id, tg_username):
         raw = clean[idx + len("СОГЛАСОВАНИЕ_ВРЕМЕНИ:"):].split("\n")[0].strip()
         clean = clean[:idx].strip()
         await send_time_request(context, user_id, tg_username, raw)
+    if "НОМЕР_ПОЛУЧЕН:" in clean:
+        idx = clean.index("НОМЕР_ПОЛУЧЕН:")
+        phone = clean[idx + len("НОМЕР_ПОЛУЧЕН:"):].split("\n")[0].strip()
+        clean = clean[:idx].strip()
+        await save_partial_lead(user_id, tg_username, phone)
     if clean:
         await update.message.reply_text(clean)
 
@@ -421,6 +441,32 @@ async def process_user_input(text, update, context):
         await process_reply(reply, update, context, user_id, user_name)
 
 
+async def handle_owner_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.lower().strip()
+    if "отчет" in text or "отчёт" in text or "лиды" in text or "hisobot" in text:
+        try:
+            if _sheet:
+                rows = _sheet.get_all_values()
+                leads = rows[1:] if len(rows) > 1 else []
+                if not leads:
+                    await update.message.reply_text("Лидов пока нет.")
+                    return
+                report = f"📊 Всего лидов: {len(leads)}\n\n"
+                for i, row in enumerate(leads[-10:], 1):
+                    name = row[0] if len(row) > 0 else "-"
+                    phone = row[1] if len(row) > 1 else "-"
+                    interest = row[2] if len(row) > 2 else "-"
+                    date = row[6] if len(row) > 6 else "-"
+                    report += f"{i}. {name} | {phone} | {interest} | {date}\n"
+                await update.message.reply_text(report)
+            else:
+                await update.message.reply_text("Google Sheets не подключён.")
+        except Exception as e:
+            await update.message.reply_text(f"Ошибка: {e}")
+    else:
+        await update.message.reply_text("Привет! Доступные команды:\n— отчет (последние 10 лидов)")
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         user_message = update.message.text
@@ -429,6 +475,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.message.from_user.id
         user_name = update.message.from_user.username or update.message.from_user.first_name or "unknown"
         logger.info(f"[TEXT] [{user_id}] @{user_name}: {user_message}")
+        if user_id == OWNER_CHAT_ID:
+            await handle_owner_message(update, context)
+            return
         await process_user_input(user_message, update, context)
     except Exception as e:
         logger.error(f"handle_message error: {e}")
