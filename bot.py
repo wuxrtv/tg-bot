@@ -56,6 +56,21 @@ except Exception as e:
     logger.error(f"Google Sheets ошибка подключения: {e}")
 
 
+def load_admin_instructions():
+    try:
+        data = r.get("admin:instructions")
+        return data if data else ""
+    except Exception:
+        return ""
+
+
+def save_admin_instructions(text):
+    try:
+        r.set("admin:instructions", text)
+    except Exception as e:
+        logger.error(f"Redis admin instructions error: {e}")
+
+
 def load_history(user_id):
     try:
         data = r.get(f"history:{user_id}")
@@ -285,7 +300,11 @@ user_voice_queue = {}
 async def ask_gpt(user_id, text):
     history = load_history(user_id)
     history.append({"role": "user", "content": text})
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + history[-40:]
+    system = SYSTEM_PROMPT
+    admin_instructions = load_admin_instructions()
+    if admin_instructions:
+        system += f"\n\nДОПОЛНИТЕЛЬНЫЕ УКАЗАНИЯ ОТ АДМИНИСТРАТОРА (выполняй обязательно):\n{admin_instructions}"
+    messages = [{"role": "system", "content": system}] + history[-40:]
 
     for attempt in range(3):
         try:
@@ -520,6 +539,12 @@ ADMIN_SYSTEM_PROMPT = """Ты — умный помощник администр
 Если администратор хочет отправить голосовое сообщение клиенту — ответь в формате:
 ОТПРАВИТЬ_ГОЛОС: [telegram_id] | [текст сообщения]
 
+Если администратор даёт поведенческую инструкцию боту (например "будь вежливее", "говори короче", "не предлагай зум", "отвечай только на узбекском") — ответь в формате:
+ИНСТРУКЦИЯ: [текст инструкции]
+
+Если администратор хочет сбросить все инструкции — ответь:
+ИНСТРУКЦИЯ: сброс
+
 Если администратор просит показать переписку с клиентом по имени — найди его ID в данных лидов и покажи историю.
 Отвечай кратко и по делу. Ты общаешься с владельцем агентства."""
 
@@ -592,6 +617,22 @@ async def handle_owner_message(update: Update, context: ContextTypes.DEFAULT_TYP
                 except Exception as e:
                     await update.message.reply_text(f"Ошибка отправки: {e}")
                 return
+
+        if "ИНСТРУКЦИЯ:" in reply:
+            idx = reply.index("ИНСТРУКЦИЯ:")
+            instruction = reply[idx + len("ИНСТРУКЦИЯ:"):].split("\n")[0].strip()
+            reply_text = reply[:idx].strip()
+            if instruction.lower() == "сброс":
+                save_admin_instructions("")
+                await update.message.reply_text("✅ Все инструкции сброшены.")
+            else:
+                current = load_admin_instructions()
+                new_instructions = (current + "\n" + instruction).strip()
+                save_admin_instructions(new_instructions)
+                await update.message.reply_text(f"✅ Инструкция принята: {instruction}")
+            if reply_text:
+                await update.message.reply_text(reply_text)
+            return
 
         if len(reply) > 4000:
             reply = reply[:4000]
