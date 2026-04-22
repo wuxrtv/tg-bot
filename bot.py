@@ -524,8 +524,8 @@ ADMIN_SYSTEM_PROMPT = """Ты — умный помощник администр
 Отвечай кратко и по делу. Ты общаешься с владельцем агентства."""
 
 
-async def handle_owner_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
+async def handle_owner_message(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str = None):
+    text = text or update.message.text.strip()
 
     leads_data = get_leads_data()
 
@@ -649,7 +649,10 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         logger.info(f"[VOICE] [{user_id}] @{user_name}: {text}")
-        await process_user_input(text, update, context)
+        if user_id == OWNER_CHAT_ID:
+            await handle_owner_message(update, context, text)
+        else:
+            await process_user_input(text, update, context)
 
     except Exception as e:
         logger.error(f"handle_voice error: {e}") 
