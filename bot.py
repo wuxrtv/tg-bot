@@ -56,6 +56,42 @@ except Exception as e:
     logger.error(f"Google Sheets ошибка подключения: {e}")
 
 
+def save_template(name, text):
+    try:
+        r.hset("templates", name, text)
+    except Exception as e:
+        logger.error(f"Redis template save error: {e}")
+
+
+def load_template(name):
+    try:
+        return r.hget("templates", name)
+    except Exception:
+        return None
+
+
+def load_all_templates():
+    try:
+        return r.hgetall("templates") or {}
+    except Exception:
+        return {}
+
+
+def delete_template(name):
+    try:
+        r.hdel("templates", name)
+    except Exception as e:
+        logger.error(f"Redis template delete error: {e}")
+
+
+def update_last_client_message(user_id):
+    try:
+        import time
+        r.set(f"last_msg:{user_id}", str(time.time()))
+    except Exception:
+        pass
+
+
 def load_admin_instructions():
     try:
         data = r.get("admin:instructions")
@@ -307,6 +343,9 @@ Afzal: "всё ок?) чем могу помочь"
 - Если спрашивает "а что будет на встрече": "покажу кейсы, разберём вашу ситуацию и скажу честно — можем помочь или нет"
 - Давай выбор без выбора: "вам удобнее в первой или второй половине дня?"
 
+НАПОМИНАНИЕ (система отправляет "__напоминание__"):
+Если получил текст "__напоминание__" — это автоматический триггер. Напиши клиенту короткое естественное сообщение чтобы вернуть его в диалог. Не упоминай что это напоминание. Просто напиши как живой человек — например "кстати, остались вопросы?" или "как вы, определились с решением?" — в зависимости от контекста переписки.
+
 ГЛАВНЫЕ ПРАВИЛА:
 - Ты не бот и не ИИ. Ты Afzal, живой менеджер.
 - Не давай советов бесплатно — цель встреча или звонок.
@@ -506,6 +545,8 @@ async def process_user_input(text, update, context):
     except Exception as e:
         logger.error(f"Ошибка уведомления о новом клиенте: {e}")
 
+    update_last_client_message(user_id)
+
     if user_id not in user_locks:
         user_locks[user_id] = asyncio.Lock()
 
@@ -581,6 +622,18 @@ ADMIN_SYSTEM_PROMPT = """Ты — умный помощник администр
 
 Если администратор хочет сбросить все инструкции — ответь:
 ИНСТРУКЦИЯ: сброс
+
+Если администратор хочет сохранить шаблон сообщения — ответь в формате:
+ШАБЛОН_СОХРАНИТЬ: [название] | [текст шаблона]
+
+Если администратор хочет отправить шаблон клиенту — ответь в формате:
+ШАБЛОН_ОТПРАВИТЬ: [название шаблона] | [telegram_id]
+
+Если администратор хочет посмотреть все шаблоны — ответь в формате:
+ШАБЛОНЫ_СПИСОК:
+
+Если администратор хочет удалить шаблон — ответь в формате:
+ШАБЛОН_УДАЛИТЬ: [название]
 
 Если администратор просит показать переписку с клиентом по имени — найди его ID в данных лидов и покажи историю.
 Отвечай кратко и по делу. Ты общаешься с владельцем агентства."""
@@ -669,6 +722,47 @@ async def handle_owner_message(update: Update, context: ContextTypes.DEFAULT_TYP
                 await update.message.reply_text(f"✅ Инструкция принята: {instruction}")
             if reply_text:
                 await update.message.reply_text(reply_text)
+            return
+
+        if "ШАБЛОН_СОХРАНИТЬ:" in reply:
+            idx = reply.index("ШАБЛОН_СОХРАНИТЬ:")
+            data = reply[idx + len("ШАБЛОН_СОХРАНИТЬ:"):].split("\n")[0].strip()
+            parts = data.split("|", 1)
+            if len(parts) == 2:
+                save_template(parts[0].strip(), parts[1].strip())
+                await update.message.reply_text(f"✅ Шаблон '{parts[0].strip()}' сохранён.")
+            return
+
+        if "ШАБЛОН_ОТПРАВИТЬ:" in reply:
+            idx = reply.index("ШАБЛОН_ОТПРАВИТЬ:")
+            data = reply[idx + len("ШАБЛОН_ОТПРАВИТЬ:"):].split("\n")[0].strip()
+            parts = data.split("|", 1)
+            if len(parts) == 2:
+                tmpl = load_template(parts[0].strip())
+                target_id = parts[1].strip()
+                if tmpl:
+                    await context.bot.send_message(chat_id=int(target_id), text=tmpl)
+                    await update.message.reply_text(f"✅ Шаблон отправлен клиенту {target_id}")
+                else:
+                    await update.message.reply_text(f"Шаблон '{parts[0].strip()}' не найден.")
+            return
+
+        if "ШАБЛОНЫ_СПИСОК:" in reply:
+            templates = load_all_templates()
+            if not templates:
+                await update.message.reply_text("Шаблонов пока нет.")
+            else:
+                result = "📋 Шаблоны:\n\n"
+                for name, text in templates.items():
+                    result += f"• {name}: {text[:50]}...\n"
+                await update.message.reply_text(result)
+            return
+
+        if "ШАБЛОН_УДАЛИТЬ:" in reply:
+            idx = reply.index("ШАБЛОН_УДАЛИТЬ:")
+            name = reply[idx + len("ШАБЛОН_УДАЛИТЬ:"):].split("\n")[0].strip()
+            delete_template(name)
+            await update.message.reply_text(f"✅ Шаблон '{name}' удалён.")
             return
 
         if len(reply) > 4000:
@@ -767,12 +861,40 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_voice_queue[user_id] = False
 
 
+async def send_reminders(context):
+    import time
+    try:
+        keys = r.keys("last_msg:*")
+        now = time.time()
+        for key in keys:
+            user_id = int(key.split(":")[1])
+            if user_id == OWNER_CHAT_ID:
+                continue
+            last_time = float(r.get(key) or 0)
+            reminded_key = f"reminded:{user_id}"
+            if now - last_time >= 86400 and not r.exists(reminded_key):
+                history = load_history(user_id)
+                if not history:
+                    continue
+                last_role = history[-1].get("role") if history else None
+                if last_role == "assistant":
+                    continue
+                reminder = await ask_gpt(user_id, "__напоминание__")
+                if reminder:
+                    await context.bot.send_message(chat_id=user_id, text=reminder)
+                    r.set(reminded_key, "1", ex=86400)
+                    logger.info(f"Напоминание отправлено: {user_id}")
+    except Exception as e:
+        logger.error(f"Ошибка напоминаний: {e}")
+
+
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", handle_start))
     app.add_handler(CallbackQueryHandler(handle_language_choice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
+    app.job_queue.run_repeating(send_reminders, interval=3600, first=60)
     logger.info("Alfred started.")
     app.run_polling(drop_pending_updates=True)
 
