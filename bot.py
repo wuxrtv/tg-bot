@@ -445,76 +445,113 @@ async def process_user_input(text, update, context):
         await process_reply(reply, update, context, user_id, user_name)
 
 
+def get_leads_data():
+    if not _sheet:
+        return "Google Sheets не подключён."
+    try:
+        rows = _sheet.get_all_values()
+        leads = rows[1:] if len(rows) > 1 else []
+        if not leads:
+            return "Лидов пока нет."
+        result = f"Всего лидов: {len(leads)}\n\n"
+        for i, row in enumerate(leads, 1):
+            name = row[0] if len(row) > 0 else "-"
+            phone = row[1] if len(row) > 1 else "-"
+            interest = row[2] if len(row) > 2 else "-"
+            fmt = row[3] if len(row) > 3 else "-"
+            time = row[4] if len(row) > 4 else "-"
+            tg_id = row[5] if len(row) > 5 else "-"
+            date = row[6] if len(row) > 6 else "-"
+            result += f"{i}. Имя: {name} | Тел: {phone} | Интерес: {interest} | Формат: {fmt} | Время: {time} | ID: {tg_id} | Дата: {date}\n"
+        return result
+    except Exception as e:
+        return f"Ошибка получения данных: {e}"
+
+
+def get_client_history(target_id):
+    history = load_history(target_id)
+    if not history:
+        return None
+    result = f"Переписка с клиентом {target_id}:\n\n"
+    for msg in history:
+        role = "Клиент" if msg["role"] == "user" else "Afzal"
+        result += f"{role}: {msg['content']}\n\n"
+    return result
+
+
+ADMIN_SYSTEM_PROMPT = """Ты — умный помощник администратора бота Virus Media.
+Тебе предоставлены данные о лидах и переписках с клиентами.
+Отвечай на вопросы администратора на основе этих данных.
+Если администратор хочет отправить сообщение клиенту — ответь в формате:
+ОТПРАВИТЬ: [telegram_id] | [текст сообщения]
+Если администратор просит показать переписку с клиентом по имени — найди его ID в данных лидов и покажи историю.
+Отвечай кратко и по делу. Ты общаешься с владельцем агентства."""
+
+
 async def handle_owner_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
-    lower = text.lower()
 
-    # ОТЧЕТ
-    if any(w in lower for w in ["отчет", "отчёт", "лиды", "hisobot"]):
-        try:
-            if _sheet:
-                rows = _sheet.get_all_values()
-                leads = rows[1:] if len(rows) > 1 else []
-                if not leads:
-                    await update.message.reply_text("Лидов пока нет.")
-                    return
-                report = f"📊 Всего лидов: {len(leads)}\n\n"
-                for i, row in enumerate(leads[-10:], 1):
-                    name = row[0] if len(row) > 0 else "-"
-                    phone = row[1] if len(row) > 1 else "-"
-                    interest = row[2] if len(row) > 2 else "-"
-                    date = row[6] if len(row) > 6 else "-"
-                    report += f"{i}. {name} | {phone} | {interest} | {date}\n"
-                await update.message.reply_text(report)
-            else:
-                await update.message.reply_text("Google Sheets не подключён.")
-        except Exception as e:
-            await update.message.reply_text(f"Ошибка: {e}")
+    leads_data = get_leads_data()
 
-    # ИСТОРИЯ [telegram_id]
-    elif lower.startswith("история"):
-        parts = text.split(maxsplit=1)
-        if len(parts) < 2:
-            await update.message.reply_text("Укажи Telegram ID. Пример:\nистория 123456789")
-            return
-        target_id = parts[1].strip()
-        history = load_history(target_id)
-        if not history:
-            await update.message.reply_text(f"История для {target_id} не найдена.")
-            return
-        result = f"💬 История с {target_id}:\n\n"
-        for msg in history:
-            role = "Клиент" if msg["role"] == "user" else "Afzal"
-            result += f"{role}: {msg['content']}\n\n"
-        # Telegram лимит 4096 символов
-        if len(result) > 4000:
-            result = result[-4000:]
-        await update.message.reply_text(result)
+    # Собираем все истории переписок
+    histories_text = ""
+    try:
+        if _sheet:
+            rows = _sheet.get_all_values()
+            leads = rows[1:] if len(rows) > 1 else []
+            for row in leads:
+                tg_id = row[5] if len(row) > 5 else None
+                name = row[0] if len(row) > 0 else "-"
+                if tg_id and tg_id != "-":
+                    hist = get_client_history(tg_id)
+                    if hist:
+                        histories_text += f"\n---\n{hist}"
+    except Exception:
+        pass
 
-    # НАПИСАТЬ [telegram_id] [текст]
-    elif lower.startswith("написать"):
-        parts = text.split(maxsplit=2)
-        if len(parts) < 3:
-            await update.message.reply_text("Пример:\nнаписать 123456789 Привет, как дела?")
-            return
-        target_id = parts[1].strip()
-        message_text = parts[2].strip()
-        try:
-            await context.bot.send_message(chat_id=int(target_id), text=message_text)
-            history = load_history(target_id)
-            history.append({"role": "assistant", "content": message_text})
-            save_history(target_id, history)
-            await update.message.reply_text(f"✅ Сообщение отправлено клиенту {target_id}")
-        except Exception as e:
-            await update.message.reply_text(f"Ошибка отправки: {e}")
+    context_data = f"ДАННЫЕ ЛИДОВ:\n{leads_data}\n\nПЕРЕПИСКИ С КЛИЕНТАМИ:{histories_text if histories_text else ' нет данных'}"
 
-    else:
-        await update.message.reply_text(
-            "Доступные команды:\n"
-            "— отчет\n"
-            "— история [telegram_id]\n"
-            "— написать [telegram_id] [текст]"
+    messages = [
+        {"role": "system", "content": ADMIN_SYSTEM_PROMPT + "\n\n" + context_data},
+        {"role": "user", "content": text},
+    ]
+
+    try:
+        response = await client.chat.completions.create(
+            model="gpt-4o",
+            messages=messages,
+            temperature=0.5,
+            max_tokens=1000,
+            timeout=30,
         )
+        reply = response.choices[0].message.content.strip()
+
+        if "ОТПРАВИТЬ:" in reply:
+            idx = reply.index("ОТПРАВИТЬ:")
+            send_data = reply[idx + len("ОТПРАВИТЬ:"):].split("\n")[0].strip()
+            reply_text = reply[:idx].strip()
+            parts = send_data.split("|", 1)
+            if len(parts) == 2:
+                target_id = parts[0].strip()
+                message_text = parts[1].strip()
+                try:
+                    await context.bot.send_message(chat_id=int(target_id), text=message_text)
+                    hist = load_history(target_id)
+                    hist.append({"role": "assistant", "content": message_text})
+                    save_history(target_id, hist)
+                    if reply_text:
+                        await update.message.reply_text(reply_text)
+                    await update.message.reply_text(f"✅ Сообщение отправлено клиенту {target_id}")
+                except Exception as e:
+                    await update.message.reply_text(f"Ошибка отправки: {e}")
+                return
+
+        if len(reply) > 4000:
+            reply = reply[:4000]
+        await update.message.reply_text(reply)
+
+    except Exception as e:
+        await update.message.reply_text(f"Ошибка: {e}")
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
