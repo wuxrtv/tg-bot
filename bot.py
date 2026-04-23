@@ -56,6 +56,20 @@ except Exception as e:
     logger.error(f"Google Sheets ошибка подключения: {e}")
 
 
+def save_case(name, file_id, media_type):
+    try:
+        r.hset("cases", name, f"{media_type}:{file_id}")
+    except Exception as e:
+        logger.error(f"Redis case save error: {e}")
+
+
+def load_all_cases():
+    try:
+        return r.hgetall("cases") or {}
+    except Exception:
+        return {}
+
+
 def save_template(name, text):
     try:
         r.hset("templates", name, text)
@@ -209,7 +223,8 @@ SYSTEM_PROMPT = """
 
 1. VIRUS MEDIA — ЛИЧНЫЙ БРЕНД И ПРОДВИЖЕНИЕ
 Строим бренд в Instagram, YouTube, TikTok. Съёмка, монтаж, стратегия, визуал — без танцев и трендов.
-ксли просят кей говоришь 
+Если клиент просит кейсы или примеры работ — добавь в конце сообщения на новой строке (клиент НЕ увидит):
+ОТПРАВИТЬ_КЕЙСЫ:
 
 Результат: 12 единиц недвижимости продано за месяц через наш грамотный продоющий конктн план, мы строим стратегия для рузульатат да
 более 30M+ просмотров по нашим клиентам.
@@ -528,6 +543,19 @@ async def process_reply(reply, update, context, user_id, tg_username):
         phone = clean[idx + len("НОМЕР_ПОЛУЧЕН:"):].split("\n")[0].strip()
         clean = clean[:idx].strip()
         await save_partial_lead(user_id, tg_username, phone)
+    if "ОТПРАВИТЬ_КЕЙСЫ:" in clean:
+        idx = clean.index("ОТПРАВИТЬ_КЕЙСЫ:")
+        clean = clean[:idx].strip()
+        cases = load_all_cases()
+        for name, value in cases.items():
+            try:
+                media_type, file_id = value.split(":", 1)
+                if media_type == "photo":
+                    await update.message.reply_photo(photo=file_id, caption=name)
+                elif media_type == "video":
+                    await update.message.reply_video(video=file_id, caption=name)
+            except Exception as e:
+                logger.error(f"Ошибка отправки кейса {name}: {e}")
     if clean:
         await update.message.reply_text(clean)
 
@@ -636,6 +664,12 @@ ADMIN_SYSTEM_PROMPT = """Ты — умный помощник администр
 Если администратор хочет сбросить все инструкции — ответь:
 ИНСТРУКЦИЯ: сброс
 
+Если администратор хочет добавить кейс (говорит "добавь кейс [название] [file_id]") — ответь в формате:
+КЕЙС_ДОБАВИТЬ: [название] | [photo или video] | [file_id]
+
+Если администратор хочет посмотреть список кейсов — ответь:
+КЕЙСЫ_СПИСОК:
+
 Если администратор хочет сохранить шаблон сообщения — ответь в формате:
 ШАБЛОН_СОХРАНИТЬ: [название] | [текст шаблона]
 
@@ -735,6 +769,24 @@ async def handle_owner_message(update: Update, context: ContextTypes.DEFAULT_TYP
                 await update.message.reply_text(f"✅ Инструкция принята: {instruction}")
             if reply_text:
                 await update.message.reply_text(reply_text)
+            return
+
+        if "КЕЙС_ДОБАВИТЬ:" in reply:
+            idx = reply.index("КЕЙС_ДОБАВИТЬ:")
+            data = reply[idx + len("КЕЙС_ДОБАВИТЬ:"):].split("\n")[0].strip()
+            parts = data.split("|", 2)
+            if len(parts) == 3:
+                save_case(parts[0].strip(), parts[2].strip(), parts[1].strip())
+                await update.message.reply_text(f"✅ Кейс '{parts[0].strip()}' сохранён.")
+            return
+
+        if "КЕЙСЫ_СПИСОК:" in reply:
+            cases = load_all_cases()
+            if not cases:
+                await update.message.reply_text("Кейсов пока нет. Отправь фото/видео боту чтобы получить File ID.")
+            else:
+                result = "📁 Кейсы:\n\n" + "\n".join(f"• {n}" for n in cases.keys())
+                await update.message.reply_text(result)
             return
 
         if "ШАБЛОН_СОХРАНИТЬ:" in reply:
@@ -874,6 +926,23 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_voice_queue[user_id] = False
 
 
+async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    if user_id != OWNER_CHAT_ID:
+        return
+    if update.message.photo:
+        file_id = update.message.photo[-1].file_id
+        media_type = "photo"
+    elif update.message.video:
+        file_id = update.message.video.file_id
+        media_type = "video"
+    else:
+        return
+    await update.message.reply_text(
+        f"✅ File ID ({media_type}):\n`{file_id}`\n\nСкопируй и скажи мне: 'добавь кейс [название] [file_id]'"
+    )
+
+
 async def send_reminders(context):
     import time
     try:
@@ -907,6 +976,8 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_language_choice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_media))
+    app.add_handler(MessageHandler(filters.VIDEO, handle_media))
     app.job_queue.run_repeating(send_reminders, interval=3600, first=60)
     logger.info("Alfred started.")
     app.run_polling(drop_pending_updates=True)
