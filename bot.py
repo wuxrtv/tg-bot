@@ -63,6 +63,23 @@ def save_case(name, file_id, media_type):
         logger.error(f"Redis case save error: {e}")
 
 
+def save_last_client(user_id, name="-"):
+    try:
+        r.set("admin:last_client_id", str(user_id))
+        r.set("admin:last_client_name", name)
+    except Exception:
+        pass
+
+
+def load_last_client():
+    try:
+        uid = r.get("admin:last_client_id")
+        name = r.get("admin:last_client_name") or "-"
+        return uid, name
+    except Exception:
+        return None, "-"
+
+
 def delete_case(name):
     try:
         r.hdel("cases", name)
@@ -475,6 +492,7 @@ async def send_lead_to_owner(context, user_id, tg_username, raw_data):
             ),
         )
         mark_lead_sent(user_id)
+        save_last_client(user_id, name)
         logger.info(f"Лид отправлен: {name}")
         if _sheet:
             try:
@@ -506,6 +524,7 @@ async def send_time_request(context, user_id, tg_username, raw_data):
                 f"Username: @{tg_username}"
             ),
         )
+        save_last_client(user_id, name)
         logger.info(f"Запрос на встречу: {name} | {time} | {fmt}")
     except Exception as e:
         logger.error(f"Ошибка запроса встречи: {e}")
@@ -742,7 +761,9 @@ async def handle_owner_message(update: Update, context: ContextTypes.DEFAULT_TYP
     except Exception:
         pass
 
-    context_data = f"ДАННЫЕ ЛИДОВ:\n{leads_data}\n\nПЕРЕПИСКИ С КЛИЕНТАМИ:{histories_text if histories_text else ' нет данных'}"
+    last_client_id, last_client_name = load_last_client()
+    last_client_info = f"\n\nПОСЛЕДНИЙ УПОМЯНУТЫЙ КЛИЕНТ: {last_client_name} (Telegram ID: {last_client_id})\nЕсли администратор говорит 'с ним', 'с ней', 'с этим клиентом', 'его переписка' — имеется в виду именно этот клиент." if last_client_id else ""
+    context_data = f"ДАННЫЕ ЛИДОВ:\n{leads_data}\n\nПЕРЕПИСКИ С КЛИЕНТАМИ:{histories_text if histories_text else ' нет данных'}{last_client_info}"
 
     messages = [
         {"role": "system", "content": ADMIN_SYSTEM_PROMPT + "\n\n" + context_data},
