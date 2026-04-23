@@ -63,6 +63,26 @@ def save_case(name, file_id, media_type):
         logger.error(f"Redis case save error: {e}")
 
 
+def delete_case(name):
+    try:
+        r.hdel("cases", name)
+    except Exception as e:
+        logger.error(f"Redis case delete error: {e}")
+
+
+def rename_case(old_name, new_name):
+    try:
+        value = r.hget("cases", old_name)
+        if value:
+            r.hset("cases", new_name, value)
+            r.hdel("cases", old_name)
+            return True
+        return False
+    except Exception as e:
+        logger.error(f"Redis case rename error: {e}")
+        return False
+
+
 def load_all_cases():
     try:
         return r.hgetall("cases") or {}
@@ -673,8 +693,14 @@ ADMIN_SYSTEM_PROMPT = """Ты — умный помощник администр
 Если администратор хочет сбросить все инструкции — ответь:
 ИНСТРУКЦИЯ: сброс
 
-Если администратор хочет добавить кейс (говорит "добавь кейс [название] [file_id]") — ответь в формате:
+Если администратор хочет добавить кейс — ответь в формате:
 КЕЙС_ДОБАВИТЬ: [название] | [photo или video] | [file_id]
+
+Если администратор хочет удалить кейс (говорит "удали кейс", "убери кейс", "delete case") — ответь в формате:
+КЕЙС_УДАЛИТЬ: [название]
+
+Если администратор хочет переименовать кейс (говорит "переименуй", "измени название", "назови по-другому") — ответь в формате:
+КЕЙС_ПЕРЕИМЕНОВАТЬ: [старое название] | [новое название]
 
 Если администратор хочет посмотреть список кейсов — ответь:
 КЕЙСЫ_СПИСОК:
@@ -787,6 +813,27 @@ async def handle_owner_message(update: Update, context: ContextTypes.DEFAULT_TYP
             if len(parts) == 3:
                 save_case(parts[0].strip(), parts[2].strip(), parts[1].strip())
                 await update.message.reply_text(f"✅ Кейс '{parts[0].strip()}' сохранён.")
+            return
+
+        if "КЕЙС_УДАЛИТЬ:" in reply:
+            idx = reply.index("КЕЙС_УДАЛИТЬ:")
+            name = reply[idx + len("КЕЙС_УДАЛИТЬ:"):].split("\n")[0].strip()
+            delete_case(name)
+            await update.message.reply_text(f"✅ Кейс '{name}' удалён.")
+            return
+
+        if "КЕЙС_ПЕРЕИМЕНОВАТЬ:" in reply:
+            idx = reply.index("КЕЙС_ПЕРЕИМЕНОВАТЬ:")
+            data = reply[idx + len("КЕЙС_ПЕРЕИМЕНОВАТЬ:"):].split("\n")[0].strip()
+            parts = data.split("|", 1)
+            if len(parts) == 2:
+                success = rename_case(parts[0].strip(), parts[1].strip())
+                if success:
+                    await update.message.reply_text(f"✅ Кейс переименован: '{parts[0].strip()}' → '{parts[1].strip()}'")
+                else:
+                    cases = load_all_cases()
+                    names = ", ".join(cases.keys()) if cases else "кейсов нет"
+                    await update.message.reply_text(f"Кейс не найден. Доступные: {names}")
             return
 
         if "КЕЙСЫ_СПИСОК:" in reply:
