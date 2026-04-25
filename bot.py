@@ -18,18 +18,28 @@ logger = logging.getLogger(__name__)
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
-OWNER_CHAT_ID_ENV = os.environ.get("OWNER_CHAT_ID")
-DEFAULT_OWNER_CHAT_ID = 7567850330
 
 if not TELEGRAM_TOKEN:
     raise ValueError("TELEGRAM_TOKEN not found")
 if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY not found")
 
+DEFAULT_ADMIN_IDS = [7567850330, 5138488162]
+
+ADMIN_TITLES = {
+    7567850330: "Админ",
+    5138488162: "CEO",
+}
+OWNER_CHAT_ID = DEFAULT_ADMIN_IDS[0]
+
 try:
-    OWNER_CHAT_ID = int(OWNER_CHAT_ID_ENV) if OWNER_CHAT_ID_ENV else DEFAULT_OWNER_CHAT_ID
-except ValueError:
-    OWNER_CHAT_ID = DEFAULT_OWNER_CHAT_ID
+    _extra = os.environ.get("ADMIN_IDS", "")
+    if _extra:
+        ADMIN_IDS = set(int(x.strip()) for x in _extra.split(",") if x.strip())
+    else:
+        ADMIN_IDS = set(DEFAULT_ADMIN_IDS)
+except Exception:
+    ADMIN_IDS = set(DEFAULT_ADMIN_IDS)
 
 client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 r = redis.from_url(REDIS_URL, decode_responses=True)
@@ -467,6 +477,14 @@ async def ask_gpt(user_id, text):
     return None
 
 
+async def notify_all_admins(context, text):
+    for admin_id in ADMIN_IDS:
+        try:
+            await context.bot.send_message(chat_id=admin_id, text=text)
+        except Exception as e:
+            logger.error(f"Ошибка уведомления админу {admin_id}: {e}")
+
+
 async def send_lead_to_owner(context, user_id, tg_username, raw_data):
     if is_lead_sent(user_id):
         logger.info(f"Лид {user_id} уже отправлен.")
@@ -478,18 +496,15 @@ async def send_lead_to_owner(context, user_id, tg_username, raw_data):
         interest = parts[2] if len(parts) > 2 else "-"
         fmt = parts[3] if len(parts) > 3 else "-"
         time = parts[4] if len(parts) > 4 else "-"
-        await context.bot.send_message(
-            chat_id=OWNER_CHAT_ID,
-            text=(
-                f"🔥 НОВЫЙ ЛИД — Virus Media\n\n"
-                f"Имя: {name}\n"
-                f"Контакт: {contact}\n"
-                f"Интерес: {interest}\n"
-                f"Формат: {fmt}\n"
-                f"Время: {time}\n\n"
-                f"Telegram ID: {user_id}\n"
-                f"Username: @{tg_username}"
-            ),
+        await notify_all_admins(context,
+            f"🔥 НОВЫЙ ЛИД — Virus Media\n\n"
+            f"Имя: {name}\n"
+            f"Контакт: {contact}\n"
+            f"Интерес: {interest}\n"
+            f"Формат: {fmt}\n"
+            f"Время: {time}\n\n"
+            f"Telegram ID: {user_id}\n"
+            f"Username: @{tg_username}"
         )
         mark_lead_sent(user_id)
         save_last_client(user_id, name)
@@ -513,16 +528,13 @@ async def send_time_request(context, user_id, tg_username, raw_data):
         name = parts[0] if len(parts) > 0 else "-"
         time = parts[1] if len(parts) > 1 else "-"
         fmt = parts[2] if len(parts) > 2 else "-"
-        await context.bot.send_message(
-            chat_id=OWNER_CHAT_ID,
-            text=(
-                f"📅 ЗАПРОС НА ВСТРЕЧУ\n\n"
-                f"Клиент: {name}\n"
-                f"Время: {time}\n"
-                f"Формат: {fmt}\n\n"
-                f"Telegram ID: {user_id}\n"
-                f"Username: @{tg_username}"
-            ),
+        await notify_all_admins(context,
+            f"📅 ЗАПРОС НА ВСТРЕЧУ\n\n"
+            f"Клиент: {name}\n"
+            f"Время: {time}\n"
+            f"Формат: {fmt}\n\n"
+            f"Telegram ID: {user_id}\n"
+            f"Username: @{tg_username}"
         )
         save_last_client(user_id, name)
         logger.info(f"Запрос на встречу: {name} | {time} | {fmt}")
@@ -591,21 +603,49 @@ async def process_reply(reply, update, context, user_id, tg_username):
         phone = clean[idx + len("НОМЕР_ПОЛУЧЕН:"):].split("\n")[0].strip()
         clean = clean[:idx].strip()
         await save_partial_lead(user_id, tg_username, phone)
-    if "ОТПРАВИТЬ_КЕЙСЫ:" in clean:
-        idx = clean.index("ОТПРАВИТЬ_КЕЙСЫ:")
-        clean = clean[:idx].strip()
-        cases = load_all_cases()
-        for name, value in cases.items():
-            try:
-                media_type, file_id = value.split(":", 1)
-                if media_type == "photo":
-                    await update.message.reply_photo(photo=file_id, caption=name)
-                elif media_type == "video":
-                    await update.message.reply_video(video=file_id, caption=name)
-            except Exception as e:
-                logger.error(f"Ошибка отправки кейса {name}: {e}")
+    for tag in ["ОТПРАВИТЬ_КЕЙСЫ:", "ОТПРАВИТЬ_КЕЙСЫ"]:
+        if tag in clean:
+            clean = clean[:clean.index(tag)].strip()
+            break
     if clean:
         await update.message.reply_text(clean)
+
+
+CASE_KEYWORDS = [
+    "кейс", "кейсы", "пример", "примеры", "портфолио", "покажи работы",
+    "покажи результат", "ваши работы", "ваши результаты",
+    "keys", "keyslar", "namuna", "namunal", "misol", "portfolio",
+]
+
+
+async def send_cases_to_user(update, context, user_id):
+    cases = load_all_cases()
+    if not cases:
+        return
+    already_sent_key = f"cases_sent:{user_id}"
+    try:
+        if r.exists(already_sent_key):
+            return
+        r.set(already_sent_key, "1", ex=86400)
+    except Exception:
+        pass
+    sent = 0
+    for name, value in cases.items():
+        try:
+            media_type, file_id = value.split(":", 1)
+            if media_type == "photo":
+                await update.message.reply_photo(photo=file_id, caption=name)
+            elif media_type == "video":
+                await update.message.reply_video(video=file_id, caption=name)
+            sent += 1
+        except Exception as e:
+            logger.error(f"Ошибка отправки кейса '{name}' клиенту {user_id}: {e}")
+            try:
+                await notify_all_admins(context, f"⚠️ Не удалось отправить кейс '{name}' клиенту {user_id}: {e}")
+            except Exception:
+                pass
+    if sent:
+        logger.info(f"Кейсы отправлены клиенту {user_id}: {sent}/{len(cases)}")
 
 
 async def process_user_input(text, update, context):
@@ -627,12 +667,16 @@ async def process_user_input(text, update, context):
         new_client_key = f"new_client:{user_id}"
         if not r.exists(new_client_key):
             r.set(new_client_key, "1")
-            await context.bot.send_message(
-                chat_id=OWNER_CHAT_ID,
-                text=f"🆕 Новый клиент написал боту\n\nTelegram ID: {user_id}\nUsername: @{user_name}"
+            await notify_all_admins(context,
+                f"🆕 Новый клиент написал боту\n\nTelegram ID: {user_id}\nUsername: @{user_name}"
             )
     except Exception as e:
         logger.error(f"Ошибка уведомления о новом клиенте: {e}")
+
+    # Автоматическая отправка кейсов по ключевым словам
+    text_lower = text.lower()
+    if any(kw in text_lower for kw in CASE_KEYWORDS):
+        await send_cases_to_user(update, context, user_id)
 
     update_last_client_message(user_id)
 
@@ -696,48 +740,51 @@ def get_client_history(target_id):
     return result
 
 
-ADMIN_SYSTEM_PROMPT = """Ты — умный помощник администратора бота Virus Media.
-Тебе предоставлены данные о лидах и переписках с клиентами.
-Отвечай на вопросы администратора на основе этих данных.
+ADMIN_SYSTEM_PROMPT = """Ты — личный ИИ-ассистент Умара, владельца агентства Virus Media.
+Ты умный, краткий, понимаешь любые формулировки — даже с опечатками, на русском, узбекском или смешанном языке.
+Ты видишь все данные лидов и переписок с клиентами. Отвечай как умный коллега — коротко и по делу.
 
-Если администратор хочет отправить текстовое сообщение клиенту — ответь в формате:
-ОТПРАВИТЬ: [telegram_id] | [текст сообщения]
+ТВОИ ВОЗМОЖНОСТИ:
 
-Если администратор хочет отправить голосовое сообщение клиенту — ответь в формате:
-ОТПРАВИТЬ_ГОЛОС: [telegram_id] | [текст сообщения]
+1. АНАЛИТИКА И ОТВЕТЫ НА ВОПРОСЫ
+Если Умар спрашивает про клиентов, лидов, переписки, статистику — отвечай на основе данных.
+Примеры: "сколько лидов", "кто последний написал", "что хочет Иван", "покажи переписку с ним", "есть ли горячие клиенты"
 
-Если администратор даёт поведенческую инструкцию боту (например "будь вежливее", "говори короче", "не предлагай зум", "отвечай только на узбекском") — ответь в формате:
-ИНСТРУКЦИЯ: [текст инструкции]
+2. ОТПРАВИТЬ СООБЩЕНИЕ КЛИЕНТУ (текст)
+Когда Умар хочет написать клиенту — определи telegram_id из контекста или данных лидов.
+Формат ответа: ОТПРАВИТЬ: [telegram_id] | [текст сообщения]
+Примеры триггеров: "напиши ему что...", "скажи последнему клиенту...", "отправь Ивану...", "пиши ему завтра встреча"
 
-Если администратор хочет сбросить все инструкции — ответь:
-ИНСТРУКЦИЯ: сброс
+3. ОТПРАВИТЬ ГОЛОСОВОЕ КЛИЕНТУ
+Формат ответа: ОТПРАВИТЬ_ГОЛОС: [telegram_id] | [текст сообщения]
+Примеры триггеров: "отправь голосовое", "скинь войс", "запиши ему голосовое"
 
-Если администратор хочет добавить кейс — ответь в формате:
-КЕЙС_ДОБАВИТЬ: [название] | [photo или video] | [file_id]
+4. ИНСТРУКЦИЯ БОТУ
+Когда Умар хочет изменить поведение бота — сохрани как инструкцию.
+Формат ответа: ИНСТРУКЦИЯ: [текст инструкции]
+Примеры триггеров: "скажи боту чтобы...", "пусть бот...", "измени тон", "говори короче", "не предлагай зум"
+Для сброса всех инструкций: ИНСТРУКЦИЯ: сброс
 
-Если администратор хочет удалить кейс (говорит "удали кейс", "убери кейс", "delete case") — ответь в формате:
-КЕЙС_УДАЛИТЬ: [название]
+5. КЕЙСЫ
+Добавить: КЕЙС_ДОБАВИТЬ: [название] | [photo или video] | [file_id]
+Удалить: КЕЙС_УДАЛИТЬ: [название]
+Переименовать: КЕЙС_ПЕРЕИМЕНОВАТЬ: [старое] | [новое]
+Список: КЕЙСЫ_СПИСОК:
+Отправить клиенту вручную: КЕЙСЫ_ОТПРАВИТЬ: [telegram_id]
+Примеры триггеров: "покажи кейсы", "удали кейс X", "переименуй кейс", "скинь кейсы последнему"
 
-Если администратор хочет переименовать кейс (говорит "переименуй", "измени название", "назови по-другому") — ответь в формате:
-КЕЙС_ПЕРЕИМЕНОВАТЬ: [старое название] | [новое название]
+6. ШАБЛОНЫ СООБЩЕНИЙ
+Сохранить: ШАБЛОН_СОХРАНИТЬ: [название] | [текст]
+Отправить: ШАБЛОН_ОТПРАВИТЬ: [название] | [telegram_id]
+Список: ШАБЛОНЫ_СПИСОК:
+Удалить: ШАБЛОН_УДАЛИТЬ: [название]
 
-Если администратор хочет посмотреть список кейсов — ответь:
-КЕЙСЫ_СПИСОК:
-
-Если администратор хочет сохранить шаблон сообщения — ответь в формате:
-ШАБЛОН_СОХРАНИТЬ: [название] | [текст шаблона]
-
-Если администратор хочет отправить шаблон клиенту — ответь в формате:
-ШАБЛОН_ОТПРАВИТЬ: [название шаблона] | [telegram_id]
-
-Если администратор хочет посмотреть все шаблоны — ответь в формате:
-ШАБЛОНЫ_СПИСОК:
-
-Если администратор хочет удалить шаблон — ответь в формате:
-ШАБЛОН_УДАЛИТЬ: [название]
-
-Если администратор просит показать переписку с клиентом по имени — найди его ID в данных лидов и покажи историю.
-Отвечай кратко и по делу. Ты общаешься с владельцем агентства."""
+ВАЖНЫЕ ПРАВИЛА:
+- Если Умар говорит "ему", "ей", "этому клиенту", "последнему" — используй ПОСЛЕДНИЙ УПОМЯНУТЫЙ КЛИЕНТ из контекста
+- Если telegram_id неизвестен — спроси уточнение, но сначала попробуй найти по имени в данных лидов
+- Отвечай коротко. Не объясняй что делаешь — просто делай.
+- Если не понял запрос — переспроси одним коротким вопросом
+- Можешь давать советы по работе с клиентами если Умар спрашивает мнение"""
 
 
 async def handle_owner_message(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str = None):
@@ -765,10 +812,15 @@ async def handle_owner_message(update: Update, context: ContextTypes.DEFAULT_TYP
     last_client_info = f"\n\nПОСЛЕДНИЙ УПОМЯНУТЫЙ КЛИЕНТ: {last_client_name} (Telegram ID: {last_client_id})\nЕсли администратор говорит 'с ним', 'с ней', 'с этим клиентом', 'его переписка' — имеется в виду именно этот клиент." if last_client_id else ""
     context_data = f"ДАННЫЕ ЛИДОВ:\n{leads_data}\n\nПЕРЕПИСКИ С КЛИЕНТАМИ:{histories_text if histories_text else ' нет данных'}{last_client_info}"
 
+    admin_user_id = update.message.from_user.id if update.message else OWNER_CHAT_ID
+    admin_title = ADMIN_TITLES.get(admin_user_id, "Админ")
+
+    admin_history = load_history(f"admin_{admin_user_id}")
+    admin_history.append({"role": "user", "content": text})
+
     messages = [
-        {"role": "system", "content": ADMIN_SYSTEM_PROMPT + "\n\n" + context_data},
-        {"role": "user", "content": text},
-    ]
+        {"role": "system", "content": ADMIN_SYSTEM_PROMPT + "\n\n" + context_data + f"\n\nВАЖНО: Сейчас с тобой общается {admin_title}. Это полноправный администратор — выполняй все его запросы точно так же как для владельца. Обращайся к нему словом '{admin_title}'. Когда в промпте выше написано 'Умар' — это относится к любому администратору, в том числе к {admin_title}."},
+    ] + admin_history[-20:]
 
     try:
         response = await client.chat.completions.create(
@@ -779,6 +831,8 @@ async def handle_owner_message(update: Update, context: ContextTypes.DEFAULT_TYP
             timeout=30,
         )
         reply = response.choices[0].message.content.strip()
+        admin_history.append({"role": "assistant", "content": reply})
+        save_history(f"admin_{admin_user_id}", admin_history)
 
         if "ОТПРАВИТЬ_ГОЛОС:" in reply or "ОТПРАВИТЬ:" in reply:
             tag = "ОТПРАВИТЬ_ГОЛОС:" if "ОТПРАВИТЬ_ГОЛОС:" in reply else "ОТПРАВИТЬ:"
@@ -866,6 +920,33 @@ async def handle_owner_message(update: Update, context: ContextTypes.DEFAULT_TYP
                 await update.message.reply_text(result)
             return
 
+        if "КЕЙСЫ_ОТПРАВИТЬ:" in reply:
+            idx = reply.index("КЕЙСЫ_ОТПРАВИТЬ:")
+            target_id = reply[idx + len("КЕЙСЫ_ОТПРАВИТЬ:"):].split("\n")[0].strip()
+            if not target_id:
+                last_id, last_name = load_last_client()
+                target_id = last_id
+            if not target_id:
+                await update.message.reply_text("Не могу определить клиента. Укажите ID.")
+                return
+            cases = load_all_cases()
+            if not cases:
+                await update.message.reply_text("Кейсов нет в базе.")
+                return
+            sent = 0
+            for name, value in cases.items():
+                try:
+                    media_type, file_id = value.split(":", 1)
+                    if media_type == "photo":
+                        await context.bot.send_photo(chat_id=int(target_id), photo=file_id, caption=name)
+                    elif media_type == "video":
+                        await context.bot.send_video(chat_id=int(target_id), video=file_id, caption=name)
+                    sent += 1
+                except Exception as e:
+                    await update.message.reply_text(f"⚠️ Ошибка кейса '{name}': {e}")
+            await update.message.reply_text(f"✅ Отправлено {sent}/{len(cases)} кейсов клиенту {target_id}")
+            return
+
         if "ШАБЛОН_СОХРАНИТЬ:" in reply:
             idx = reply.index("ШАБЛОН_СОХРАНИТЬ:")
             data = reply[idx + len("ШАБЛОН_СОХРАНИТЬ:"):].split("\n")[0].strip()
@@ -917,7 +998,21 @@ async def handle_owner_message(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
-    if user_id == OWNER_CHAT_ID:
+    if user_id in ADMIN_IDS:
+        title = ADMIN_TITLES.get(user_id, "Админ")
+        leads_data = get_leads_data()
+        total = len(leads_data.split("\n")) - 2 if "Всего" in leads_data else 0
+        await update.message.reply_text(
+            f"Здравствуй, {title}!\n\n"
+            f"Вот что я умею:\n"
+            f"• Показать переписку с клиентом\n"
+            f"• Написать клиенту (текст или голос)\n"
+            f"• Управлять кейсами и шаблонами\n"
+            f"• Давать инструкции боту\n"
+            f"• Показать статистику лидов\n\n"
+            f"Лидов в базе: {total}\n\n"
+            f"Просто напиши что нужно — пойму."
+        )
         return
     keyboard = InlineKeyboardMarkup([
         [
@@ -932,7 +1027,7 @@ async def handle_language_choice(update: Update, context: ContextTypes.DEFAULT_T
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
-    if user_id == OWNER_CHAT_ID:
+    if user_id in ADMIN_IDS:
         return
     text = "Привет" if query.data == "lang_ru" else "Salom"
     await query.edit_message_reply_markup(reply_markup=None)
@@ -952,7 +1047,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.message.from_user.id
         user_name = update.message.from_user.username or update.message.from_user.first_name or "unknown"
         logger.info(f"[TEXT] [{user_id}] @{user_name}: {user_message}")
-        if user_id == OWNER_CHAT_ID:
+        if user_id in ADMIN_IDS:
             await handle_owner_message(update, context)
             return
         await process_user_input(user_message, update, context)
@@ -992,7 +1087,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         logger.info(f"[VOICE] [{user_id}] @{user_name}: {text}")
-        if user_id == OWNER_CHAT_ID:
+        if user_id in ADMIN_IDS:
             await handle_owner_message(update, context, text)
         else:
             await process_user_input(text, update, context)
@@ -1005,7 +1100,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
-    if user_id != OWNER_CHAT_ID:
+    if user_id not in ADMIN_IDS:
         return
     if update.message.photo:
         file_id = update.message.photo[-1].file_id
@@ -1027,7 +1122,7 @@ async def send_reminders(context):
         now = time.time()
         for key in keys:
             user_id = int(key.split(":")[1])
-            if user_id == OWNER_CHAT_ID:
+            if user_id in ADMIN_IDS:
                 continue
             last_time = float(r.get(key) or 0)
             reminded_key = f"reminded:{user_id}"
@@ -1047,7 +1142,18 @@ async def send_reminders(context):
         logger.error(f"Ошибка напоминаний: {e}")
 
 
+def cleanup_admin_client_data():
+    for admin_id in ADMIN_IDS:
+        for key in [f"history:{admin_id}", f"new_client:{admin_id}", f"cases_sent:{admin_id}", f"lead:{admin_id}", f"last_msg:{admin_id}", f"reminded:{admin_id}"]:
+            try:
+                r.delete(key)
+            except Exception:
+                pass
+    logger.info("Клиентские данные админов очищены.")
+
+
 def main():
+    cleanup_admin_client_data()
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", handle_start))
     app.add_handler(CallbackQueryHandler(handle_language_choice))
