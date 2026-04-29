@@ -5,24 +5,40 @@ import uuid
 import asyncio
 import tempfile
 from datetime import datetime
+from pathlib import Path
 import redis
 import gspread
 from google.oauth2.service_account import Credentials
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, CallbackQueryHandler, filters, ContextTypes
 from openai import AsyncOpenAI
+from anthropic import AsyncAnthropic
+
+# Загружаем .env если запущен напрямую
+_env_path = Path(__file__).parent / ".env"
+if _env_path.exists():
+    with open(_env_path, encoding="utf-8") as _f:
+        for _line in _f:
+            _line = _line.strip()
+            if _line and not _line.startswith("#") and "=" in _line:
+                _k, _, _v = _line.partition("=")
+                if _v.strip() and _k.strip() not in os.environ:
+                    os.environ[_k.strip()] = _v.strip()
 
 logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
 
 if not TELEGRAM_TOKEN:
     raise ValueError("TELEGRAM_TOKEN not found")
 if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY not found")
+if not ANTHROPIC_API_KEY:
+    raise ValueError("ANTHROPIC_API_KEY not found")
 
 DEFAULT_ADMIN_IDS = [7567850330, 5138488162]
 
@@ -41,7 +57,8 @@ try:
 except Exception:
     ADMIN_IDS = set(DEFAULT_ADMIN_IDS)
 
-client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+anthropic_client = AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
 r = redis.from_url(REDIS_URL, decode_responses=True)
 
 SPREADSHEET_ID = "1Llr_XlNo_8deyOy9RraaVsB5Q9JlEd2dXKEJUu39RGI"
@@ -536,23 +553,31 @@ async def ask_gpt(user_id, text):
     admin_instructions = load_admin_instructions()
     if admin_instructions:
         system += f"\n\nДОПОЛНИТЕЛЬНЫЕ УКАЗАНИЯ ОТ АДМИНИСТРАТОРА (выполняй обязательно):\n{admin_instructions}"
-    messages = [{"role": "system", "content": system}] + history[-40:]
+    # Убираем дубли ролей (Claude требует чередование user/assistant)
+    clean_history = []
+    for msg in history[-40:]:
+        if clean_history and clean_history[-1]["role"] == msg["role"]:
+            clean_history[-1]["content"] += "\n" + msg["content"]
+        else:
+            clean_history.append({"role": msg["role"], "content": msg["content"]})
+    if not clean_history or clean_history[0]["role"] != "user":
+        clean_history = [m for m in clean_history if m["role"] == "user" or clean_history.index(m) > 0]
 
     for attempt in range(3):
         try:
-            response = await client.chat.completions.create(
-                model="gpt-4o",
-                messages=messages,
+            response = await anthropic_client.messages.create(
+                model="claude-sonnet-4-6",
+                system=system,
+                messages=clean_history,
                 temperature=0.85,
                 max_tokens=400,
-                timeout=30,
             )
-            reply = response.choices[0].message.content.strip()
+            reply = response.content[0].text.strip()
             history.append({"role": "assistant", "content": reply})
             save_history(user_id, history)
             return reply
         except Exception as e:
-            logger.error(f"OpenAI error attempt {attempt + 1}: {e}")
+            logger.error(f"Claude error attempt {attempt + 1}: {e}")
             if attempt < 2:
                 await asyncio.sleep(2)
             else:
@@ -640,7 +665,7 @@ async def save_partial_lead(user_id, tg_username, phone):
 
 async def text_to_voice(text):
     try:
-        response = await client.audio.speech.create(
+        response = await openai_client.audio.speech.create(
             model="tts-1",
             voice="onyx",
             input=text,
@@ -936,19 +961,23 @@ async def handle_owner_message(update: Update, context: ContextTypes.DEFAULT_TYP
     admin_history = load_history(f"admin_{admin_user_id}")
     admin_history.append({"role": "user", "content": text})
 
-    messages = [
-        {"role": "system", "content": ADMIN_SYSTEM_PROMPT + "\n\n" + context_data + f"\n\nВАЖНО: Сейчас с тобой общается {admin_title}. Это полноправный администратор — выполняй все его запросы точно так же как для владельца. Обращайся к нему словом '{admin_title}'. Когда в промпте выше написано 'Умар' — это относится к любому администратору, в том числе к {admin_title}."},
-    ] + admin_history[-20:]
+    admin_system = ADMIN_SYSTEM_PROMPT + "\n\n" + context_data + f"\n\nВАЖНО: Сейчас с тобой общается {admin_title}. Это полноправный администратор — выполняй все его запросы точно так же как для владельца. Обращайся к нему словом '{admin_title}'. Когда в промпте выше написано 'Умар' — это относится к любому администратору, в том числе к {admin_title}."
+    clean_admin_history = []
+    for msg in admin_history[-20:]:
+        if clean_admin_history and clean_admin_history[-1]["role"] == msg["role"]:
+            clean_admin_history[-1]["content"] += "\n" + msg["content"]
+        else:
+            clean_admin_history.append({"role": msg["role"], "content": msg["content"]})
 
     try:
-        response = await client.chat.completions.create(
-            model="gpt-4o",
-            messages=messages,
+        response = await anthropic_client.messages.create(
+            model="claude-sonnet-4-6",
+            system=admin_system,
+            messages=clean_admin_history,
             temperature=0.5,
             max_tokens=1000,
-            timeout=30,
         )
-        reply = response.choices[0].message.content.strip()
+        reply = response.content[0].text.strip()
         admin_history.append({"role": "assistant", "content": reply})
         save_history(f"admin_{admin_user_id}", admin_history)
 
@@ -1276,7 +1305,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await voice_file.download_to_drive(file_path)
         try:
             with open(file_path, "rb") as audio:
-                transcript = await client.audio.transcriptions.create(
+                transcript = await openai_client.audio.transcriptions.create(
                     model="whisper-1",
                     file=audio,
                     timeout=30,
